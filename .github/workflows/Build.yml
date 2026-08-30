@@ -328,142 +328,41 @@ jobs:
                 if sed -i -E "s${d}${old_re}${d}${new}${d}" "$f"; then
                   echo "  [ok] ${label} (in $f)"
                   return 0
-                else
-                  echo "::warning::gaming-perf-tune: '${label}' matched in $f but sed edit failed, skipped"
-                  return 1
                 fi
               fi
             done
-            echo "::warning::gaming-perf-tune: '${label}' pattern not found, skipped (kernel version drift)"
-            local ident
-            ident="$(printf '%s' "$old_re" | grep -oE '[A-Za-z_][A-Za-z0-9_]*' | grep -vE '^(define|include|ifdef|ifndef|endif|elif|undef)$' | head -n1)"
-            if [ -n "$ident" ]; then
-              for f in "${files[@]}"; do
-                [ -f "$f" ] || continue
-                if grep -n -- "$ident" "$f" >/dev/null 2>&1; then
-                  echo "  [debug] current match for '${ident}' in $f:"
-                  grep -n -- "$ident" "$f" | head -n3 | sed 's/^/    /'
-                fi
-              done
-            fi
+            echo "::warning::gaming-perf-tune: '${label}' pattern not found, skipped"
             return 1
           }
 
-          echo "Kconfig: allow force-loading mismatched vendor modules"
           echo "CONFIG_MODULE_FORCE_LOAD=y" >> arch/arm64/configs/gki_defconfig
-
-          echo "Reducing VFS cache pressure default (fs/dcache.c)"
           patch_default "vfs_cache_pressure default 100->50" \
             'int[[:space:]]+sysctl_vfs_cache_pressure[[:space:]]+__read_mostly[[:space:]]*=[[:space:]]*100;' \
             'int sysctl_vfs_cache_pressure __read_mostly = 50;' \
             fs/dcache.c || true
-
-          echo "Reducing freeze timeout (kernel/power/process.c, 20s->1s)"
           patch_default "freeze_timeout_msecs 20000->1000" \
             '(unsigned[[:space:]]+int|int)[[:space:]]+(__read_mostly[[:space:]]+)?freeze_timeout_msecs[[:space:]]*=[[:space:]]*20[[:space:]]**[[:space:]]*MSEC_PER_SEC;' \
             '\u0001 \u0002freeze_timeout_msecs = 1 * MSEC_PER_SEC;' \
             kernel/power/process.c kernel/power/main.c kernel/power/suspend.c || true
-
-          echo "Reducing F2FS urgent GC sleep time (fs/f2fs/gc.h, 500ms->50ms)"
           patch_default "F2FS urgent GC sleep 500->50" \
             '#define[[:space:]]+DEF_GC_THREAD_URGENT_SLEEP_TIME[[:space:]]+500' \
             '#define DEF_GC_THREAD_URGENT_SLEEP_TIME\t50' \
             fs/f2fs/gc.h fs/f2fs/f2fs.h || true
-
-          echo "Increasing PCI PME poll timeout (drivers/pci/pci.c, 1s->4s)"
           patch_default "PME_TIMEOUT 1000->4000" \
             '#define[[:space:]]+PME_TIMEOUT[[:space:]]+1000' \
             '#define PME_TIMEOUT\t4000' \
             drivers/pci/pci.c || true
-
-          echo "Raising cpuidle teo governor default rating"
           patch_default "teo governor rating 19->25" \
             '.rating[[:space:]]*=[[:space:]]*19,' \
             '.rating =\t25,' \
             drivers/cpuidle/governors/teo.c || true
-
-          echo "Relaxing -Werror for vendor/module compat"
           echo "CONFIG_WERROR=n" >> arch/arm64/configs/gki_defconfig
-
-          echo "Raising ext4 default journal commit interval (5s->30s)"
-          patch_default "ext4/jbd2 commit interval 5s->30s" \
-            '#define[[:space:]]+JBD2_DEFAULT_MAX_COMMIT_AGE[[:space:]]+5' \
-            '#define JBD2_DEFAULT_MAX_COMMIT_AGE\t30' \
-            include/linux/jbd2.h fs/jbd2/journal.c || true
-
-          echo "Lowering vm_swappiness default (60->30) for less aggressive swapping"
-          patch_default "vm_swappiness 60->30" \
-            'int[[:space:]]+vm_swappiness[[:space:]]*=[[:space:]]*60;' \
-            'int vm_swappiness = 30;' \
-            mm/vmscan.c || true
-
-          echo "Reducing CFS scheduler latency (6ms->4ms) for snappier task switching"
-          patch_default "sysctl_sched_latency 6000000->4000000" \
-            'unsigned[[:space:]]+int[[:space:]]+sysctl_sched_latency[[:space:]]*=[[:space:]]*6000000ULL;' \
-            'unsigned int sysctl_sched_latency = 4000000ULL;' \
-            kernel/sched/fair.c || true
-
-          echo "Reducing CFS min granularity (0.75ms->0.5ms)"
-          patch_default "sysctl_sched_min_granularity 750000->500000" \
-            'unsigned[[:space:]]+int[[:space:]]+sysctl_sched_min_granularity[[:space:]]*=[[:space:]]*750000ULL;' \
-            'unsigned int sysctl_sched_min_granularity = 500000ULL;' \
-            kernel/sched/fair.c || true
-
-          echo "Reducing CFS wakeup granularity (1ms->0.5ms) for faster preemption on wake"
-          patch_default "sysctl_sched_wakeup_granularity 1000000->500000" \
-            'unsigned[[:space:]]+int[[:space:]]+sysctl_sched_wakeup_granularity[[:space:]]*=[[:space:]]*1000000UL;' \
-            'unsigned int sysctl_sched_wakeup_granularity = 500000UL;' \
-            kernel/sched/fair.c || true
-
-          echo "Reducing task migration cost (0.5ms->0.25ms) for faster load balancing across cores"
-          patch_default "sysctl_sched_migration_cost 500000->250000" \
-            'const_debug[[:space:]]+unsigned[[:space:]]+int[[:space:]]+sysctl_sched_migration_cost[[:space:]]*=[[:space:]]*500000UL;' \
-            'const_debug unsigned int sysctl_sched_migration_cost = 250000UL;' \
-            kernel/sched/fair.c || true
-
-          echo "Raising vm.max_map_count default (65530->1048576) for mmap-heavy games/emulators"
-          patch_default "DEFAULT_MAX_MAP_COUNT (USHRT_MAX-5)->1048576" \
-            '#define[[:space:]]+DEFAULT_MAX_MAP_COUNT[[:space:]]*([[:space:]]*USHRT_MAX[[:space:]]*-[[:space:]]*MAPCOUNT_ELF_CORE_MARGIN[[:space:]]*)' \
-            '#define DEFAULT_MAX_MAP_COUNT (1048576)' \
-            include/linux/mm.h || true
-
-          echo "Lowering dirty_background_ratio (10->5) to complement dirty_ratio tweak"
-          patch_default "dirty_background_ratio 10->5" \
-            'int[[:space:]]+dirty_background_ratio[[:space:]]*=[[:space:]]*10;' \
-            'int dirty_background_ratio = 5;' \
-            mm/page-writeback.c || true
-
-          echo "Reducing dirty page expire interval (30s->10s) to avoid large writeback stalls"
-          patch_default "dirty_expire_interval 3000->1000 (centisecs)" \
-            'unsigned[[:space:]]+int[[:space:]]+dirty_expire_interval[[:space:]]*=[[:space:]]*30[[:space:]]**[[:space:]]*100;' \
-            'unsigned int dirty_expire_interval = 10 * 100;' \
-            mm/page-writeback.c || true
-
-          echo "Raising min_free_kbytes floor slightly for smoother allocs under memory pressure"
-          patch_default "min_free_kbytes floor 128->256 (in pages, KB)" \
-            'int[[:space:]]+min_free_kbytes[[:space:]]*=[[:space:]]*1024;' \
-            'int min_free_kbytes = 2048;' \
-            mm/page_alloc.c || true
-
-          echo "Lowering dirty_ratio default for snappier writeback under load"
-          patch_default "vm dirty_ratio 20->10" \
-            'int[[:space:]]+vm_dirty_ratio[[:space:]]*=[[:space:]]*20;' \
-            'int vm_dirty_ratio = 10;' \
-            mm/page-writeback.c || true
-
-          echo "Enabling 1000Hz kernel tick (lower scheduling latency)"
-          echo "CONFIG_HZ_1000=y" >> arch/arm64/configs/gki_defconfig
-
-          echo "Enabling Kyber/Deadline I/O schedulers (available, not forced default)"
-          echo "CONFIG_MQ_IOSCHED_KYBER=y" >> arch/arm64/configs/gki_defconfig
-          echo "CONFIG_MQ_IOSCHED_DEADLINE=y" >> arch/arm64/configs/gki_defconfig
 
       - name: Apply custom kernel branding
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
-          mv scripts/setlocalversion scripts/setlocalversion.orig
-          chmod +x scripts/setlocalversion.orig
+          mv -f scripts/setlocalversion scripts/setlocalversion.orig
           cat > scripts/setlocalversion << 'EOF'
           #!/bin/sh
           printf -- '-NeutronClang-Latest-KSUNv1-STABLE'
@@ -484,51 +383,77 @@ jobs:
       - name: Setup latest Neutron Clang
         run: |
           set -euo pipefail
+          rm -rf "$NEUTRON_DIR"
           mkdir -p "$NEUTRON_DIR"
           cd "$NEUTRON_DIR"
           curl -fsSL -o antman https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman
           chmod +x antman
           ./antman -S=latest
+          test -x "$NEUTRON_DIR/bin/clang"
+          test -x "$NEUTRON_DIR/bin/llvm-ar"
+          test -x "$NEUTRON_DIR/bin/ld.lld"
+          echo "NEUTRON_BIN=$NEUTRON_DIR/bin" >> "$GITHUB_ENV"
+          echo "$NEUTRON_DIR/bin" >> "$GITHUB_PATH"
 
-      - name: Confirm Neutron Clang toolchain
+      - name: Verify Neutron toolchain before build
         run: |
           set -euo pipefail
-          export PATH="$NEUTRON_DIR/bin:$PATH"
-          which clang
-          which llvm-ar
-          clang --version
+          export PATH="$NEUTRON_BIN:$PATH"
+          CLANG_PATH="$(readlink -f "$(command -v clang)")"
+          LLVM_AR_PATH="$(readlink -f "$(command -v llvm-ar)")"
+          LLD_PATH="$(readlink -f "$(command -v ld.lld)")"
+          echo "clang path: $CLANG_PATH"
+          echo "llvm-ar path: $LLVM_AR_PATH"
+          echo "ld.lld path: $LLD_PATH"
+          test "$CLANG_PATH" = "$NEUTRON_BIN/clang"
+          test "$LLVM_AR_PATH" = "$NEUTRON_BIN/llvm-ar"
+          test "$LLD_PATH" = "$NEUTRON_BIN/ld.lld"
+          clang --version | tee "$GITHUB_WORKSPACE/neutron-clang-version.txt"
           llvm-ar --version
-          llvm-nm --version
-          llvm-objcopy --version
-          llvm-objdump --version
-          llvm-strip --version
+          ld.lld --version
+          echo "NEUTRON_CLANG_VERSION=$(clang --version | head -n1)" >> "$GITHUB_ENV"
 
-      - name: Build environment sanity
-        run: |
-          set -euo pipefail
-          echo "PATH=$NEUTRON_DIR/bin:$PATH" >> "$GITHUB_ENV"
-
-      - name: Build kernel
+      - name: Build kernel with verified Neutron Clang
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          export PATH="$NEUTRON_DIR/bin:$PATH"
+          export PATH="$NEUTRON_BIN:$PATH"
           export TRIM_NONLISTED_KMI=0
           export KMI_SYMBOL_LIST_STRICT_MODE=0
-          LTO=thin CC=clang LLVM=1 LLVM_IAS=1 \
-          AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
-          BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" \
+          export CC="$NEUTRON_BIN/clang"
+          export LD="$NEUTRON_BIN/ld.lld"
+          export AR="$NEUTRON_BIN/llvm-ar"
+          export NM="$NEUTRON_BIN/llvm-nm"
+          export OBJCOPY="$NEUTRON_BIN/llvm-objcopy"
+          export OBJDUMP="$NEUTRON_BIN/llvm-objdump"
+          export STRIP="$NEUTRON_BIN/llvm-strip"
+          LTO=thin LLVM=1 LLVM_IAS=1 \
+          CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" \
+          BUILD_CONFIG=common/build.config.gki.aarch64 \
+          USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" \
           build/build.sh -j"$(nproc)"
 
-      - name: Verify final configs
+      - name: Verify build used Neutron clang
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          CFG=$(find out -name ".config" | head -n1)
-          [ -n "$CFG" ]
-          for SYM in CONFIG_NAMESPACES CONFIG_NET_NS CONFIG_PID_NS CONFIG_CGROUPS CONFIG_USER_NS; do
-            grep -q "^${SYM}=y$" "$CFG"
-          done
+          export PATH="$NEUTRON_BIN:$PATH"
+          COMPILE_H="$(find out -path '*/include/generated/compile.h' | head -n1)"
+          test -n "$COMPILE_H"
+          echo "===== compile.h ====="
+          cat "$COMPILE_H"
+          if grep -qi 'clang version 12' "$COMPILE_H"; then
+            echo "::error::Build used clang 12, not the expected Neutron toolchain."
+            exit 1
+          fi
+          if ! grep -qiE 'clang version (2[0-9]|[3-9][0-9])' "$COMPILE_H"; then
+            echo "::error::Could not verify a modern Neutron clang in compile.h."
+            exit 1
+          fi
+          mkdir -p "$GITHUB_WORKSPACE/build-info"
+          cp "$COMPILE_H" "$GITHUB_WORKSPACE/build-info/compile.h"
+          clang --version > "$GITHUB_WORKSPACE/build-info/neutron-clang-version.txt"
+          readlink -f "$(command -v clang)" > "$GITHUB_WORKSPACE/build-info/neutron-clang-path.txt"
 
       - name: Locate built Image
         working-directory: kernel_workspace
@@ -553,5 +478,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ github.event.inputs.device_name }}-build
-          path: "*.zip"
+          path: |
+            *.zip
+            build-info/**
           retention-days: 14
