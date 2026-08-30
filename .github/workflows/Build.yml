@@ -403,6 +403,31 @@ jobs:
           grep -rl '^MODULES_ORDER=' build.config* 2>/dev/null | xargs -r sed -i 's/^MODULES_ORDER=.*/MODULES_ORDER=/' || true
           grep -rl '^MODULES_LIST=' build.config* 2>/dev/null | xargs -r sed -i 's/^MODULES_LIST=.*/MODULES_LIST=/' || true
 
+      - name: Force Neutron Clang (strip AOSP prebuilt clang override)
+        working-directory: kernel_workspace
+        run: |
+          set -euo pipefail
+          # build.config* hardcodes CLANG_PREBUILT_BIN pointing at the AOSP prebuilt
+          # clang that `repo sync` fetched. build/build.sh does:
+          #   if [ -n "${CLANG_PREBUILT_BIN}" ]; then
+          #     PATH=${ROOT_DIR}/${CLANG_PREBUILT_BIN}:${PATH}
+          #   fi
+          # which prepends that AOSP clang AHEAD of our Neutron Clang, so the
+          # kernel actually gets compiled (and its version banner stamped) with
+          # the AOSP toolchain instead of Neutron. Blanking these vars makes
+          # build.sh's guard skip that PATH prepend, so our PATH (which already
+          # has Neutron Clang first) is what actually gets used.
+          find . -name 'build.config*' -print0 2>/dev/null | while IFS= read -r -d '' f; do
+            if grep -q '^CLANG_PREBUILT_BIN=' "$f"; then
+              sed -i 's/^CLANG_PREBUILT_BIN=.*/CLANG_PREBUILT_BIN=/' "$f"
+              echo "neutralized CLANG_PREBUILT_BIN in $f"
+            fi
+            if grep -q '^LLVM_PREBUILT_BIN=' "$f"; then
+              sed -i 's/^LLVM_PREBUILT_BIN=.*/LLVM_PREBUILT_BIN=/' "$f"
+              echo "neutralized LLVM_PREBUILT_BIN in $f"
+            fi
+          done
+
       - name: Build kernel
         working-directory: kernel_workspace
         run: |
