@@ -1,30 +1,30 @@
-name: Build Custom GKI Kernel - Neutron Clang 24
+name: Build GKI Kernel - Neutron Clang 24
 
 on:
   workflow_dispatch:
     inputs:
       os_patch_level:
-        description: "GKI branch/tag, for example android12-5.10.264_r00"
+        description: "Kernel branch or tag, e.g. android12-5.10.264_r00"
         required: true
         default: "android12-5.10.264_r00"
 
       susfs_commit:
-        description: "SUSFS commit hash; empty means latest"
+        description: "Optional SUSFS commit; empty means latest"
         required: false
         default: ""
 
       device_name:
-        description: "Artifact/device label"
+        description: "Artifact name"
         required: true
         default: "gki-custom"
 
       enable_gaming_perf_tune:
-        description: "Enable optional gaming performance tweaks"
+        description: "Enable optional gaming tweaks"
         required: true
         default: "false"
 
       enable_performance_governor:
-        description: "Use performance governor instead of schedutil"
+        description: "Use performance CPU governor"
         required: true
         default: "false"
 
@@ -66,6 +66,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p "$HOME/bin"
 
           curl -fsSL \
@@ -79,7 +80,7 @@ jobs:
           git config --global user.email \
             "github-actions[bot]@users.noreply.github.com"
 
-      - name: Prepare ccache
+      - name: Configure ccache
         shell: bash
         run: |
           set -euo pipefail
@@ -87,7 +88,7 @@ jobs:
           ccache --max-size=5G
           ccache --set-config=compression=true
 
-      - name: Resolve kernel manifest
+      - name: Resolve manifest
         shell: bash
         run: |
           set -euo pipefail
@@ -112,7 +113,7 @@ jobs:
           echo "PIN_REF=$PIN_REF" >> "$GITHUB_ENV"
           echo "PIN_TYPE=$PIN_TYPE" >> "$GITHUB_ENV"
 
-      - name: Sync GKI source
+      - name: Sync GKI kernel source
         shell: bash
         run: |
           set -euo pipefail
@@ -161,7 +162,6 @@ jobs:
 
           SUBLEVEL="$(grep -m1 '^SUBLEVEL = ' common/Makefile | awk '{print $3}')"
           echo "SUBLEVEL=$SUBLEVEL" >> "$GITHUB_ENV"
-          echo "Kernel sublevel: $SUBLEVEL"
 
       - name: Clone SUSFS
         working-directory: kernel_workspace
@@ -192,7 +192,7 @@ jobs:
             https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh \
             | bash -s dev-susfs
 
-      - name: Apply SUSFS files and patch
+      - name: Apply SUSFS patch
         working-directory: kernel_workspace/common
         shell: bash
         run: |
@@ -308,7 +308,8 @@ jobs:
           patch -p1 < /tmp/ntsync_compat.patch || true
           patch -p1 < /tmp/ntsync_base.patch || true
 
-          echo "CONFIG_NTSYNC=y" >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_NTSYNC=y" \
+            >> arch/arm64/configs/gki_defconfig
 
       - name: Configure namespaces
         working-directory: kernel_workspace/common/arch/arm64/configs
@@ -338,20 +339,7 @@ jobs:
           CONFIG_NETFILTER_XT_SET=y
           EOF
 
-      - name: Optional gaming performance tweaks
-        if: ${{ github.event.inputs.enable_gaming_perf_tune == 'true' }}
-        working-directory: kernel_workspace/common
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "CONFIG_MODULE_FORCE_LOAD=y" \
-            >> arch/arm64/configs/gki_defconfig
-
-          echo "CONFIG_WERROR=n" \
-            >> arch/arm64/configs/gki_defconfig
-
-      - name: Optional performance governor
+      - name: Optional performance configuration
         if: ${{ github.event.inputs.enable_performance_governor == 'true' }}
         working-directory: kernel_workspace/common/arch/arm64/configs
         shell: bash
@@ -363,7 +351,16 @@ jobs:
           CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=n
           EOF
 
-      - name: Apply kernel branding
+      - name: Optional gaming tweaks
+        if: ${{ github.event.inputs.enable_gaming_perf_tune == 'true' }}
+        working-directory: kernel_workspace/common/arch/arm64/configs
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "CONFIG_MODULE_FORCE_LOAD=y" >> gki_defconfig
+          echo "CONFIG_WERROR=n" >> gki_defconfig
+
+      - name: Kernel branding
         working-directory: kernel_workspace/common
         shell: bash
         run: |
@@ -380,19 +377,47 @@ jobs:
 
           chmod +x scripts/setlocalversion
 
-      - name: Disable strict checks
+      - name: Disable optional strict checks
         working-directory: kernel_workspace
         shell: bash
         run: |
           set -euo pipefail
 
-          sed -i 's/check_defconfig//' common/build.config.gki || true
+          CONFIG_FILES=(
+            common/build.config.gki
+            common/build.config.gki.aarch64
+            common/build.config.common
+            build.config.gki
+            build.config.gki.aarch64
+          )
 
-          grep -rl '^MODULES_ORDER=' common/build.config* 2>/dev/null |
-            xargs -r sed -i 's/^MODULES_ORDER=.*/MODULES_ORDER=/'
+          for CONFIG in "${CONFIG_FILES[@]}"; do
+            if [ ! -f "$CONFIG" ]; then
+              continue
+            fi
 
-          grep -rl '^MODULES_LIST=' common/build.config* 2>/dev/null |
-            xargs -r sed -i 's/^MODULES_LIST=.*/MODULES_LIST=/'
+            if grep -q '^check_defconfig' "$CONFIG"; then
+              sed -i '/^check_defconfig/d' "$CONFIG"
+            fi
+
+            if grep -q '^CHECK_DEFCONFIG=' "$CONFIG"; then
+              sed -i 's/^CHECK_DEFCONFIG=.*/CHECK_DEFCONFIG=0/' "$CONFIG"
+            fi
+
+            if grep -q '^MODULES_ORDER=' "$CONFIG"; then
+              sed -i 's#^MODULES_ORDER=.*#MODULES_ORDER=#' "$CONFIG"
+            fi
+
+            if grep -q '^MODULES_LIST=' "$CONFIG"; then
+              sed -i 's#^MODULES_LIST=.*#MODULES_LIST=#' "$CONFIG"
+            fi
+          done
+
+          echo "Strict-check handling completed."
+
+          grep -RInE \
+            'check_defconfig|CHECK_DEFCONFIG|MODULES_ORDER|MODULES_LIST' \
+            common/build.config* build.config* 2>/dev/null || true
 
       - name: Setup latest Neutron Clang
         shell: bash
@@ -436,13 +461,39 @@ jobs:
           echo "clang++: $(readlink -f clang++)"
           echo "ld.lld: $(readlink -f ld.lld)"
 
-      - name: Show runner resources
+      - name: Verify Neutron toolchain
         shell: bash
         run: |
           set -euo pipefail
-          free -h
-          nproc
-          df -h
+
+          export PATH="$NEUTRON_BIN:$PATH"
+
+          test "$(readlink -f "$(command -v clang)")" \
+            = "$NEUTRON_BIN/clang-24"
+
+          test "$(readlink -f "$(command -v clang++)")" \
+            = "$NEUTRON_BIN/clang-24"
+
+          test "$(readlink -f "$(command -v llvm-ar)")" \
+            = "$NEUTRON_BIN/llvm-ar"
+
+          test "$(readlink -f "$(command -v ld.lld)")" \
+            = "$NEUTRON_BIN/lld"
+
+          mkdir -p "$GITHUB_WORKSPACE/build-info"
+
+          clang --version | tee \
+            "$GITHUB_WORKSPACE/build-info/neutron-clang-version.txt"
+
+          llvm-ar --version | tee \
+            "$GITHUB_WORKSPACE/build-info/llvm-ar-version.txt"
+
+          ld.lld --version | tee \
+            "$GITHUB_WORKSPACE/build-info/lld-version.txt"
+
+          grep -qiE \
+            'Neutron clang version 24|clang version 24' \
+            "$GITHUB_WORKSPACE/build-info/neutron-clang-version.txt"
 
       - name: Force Neutron variables
         working-directory: kernel_workspace
@@ -451,7 +502,6 @@ jobs:
           set -euo pipefail
 
           CONFIG="common/build.config.gki.aarch64"
-
           test -f "$CONFIG"
 
           sed -i '/^CLANG_PREBUILT_BIN=/d' "$CONFIG"
@@ -490,35 +540,6 @@ jobs:
             'CLANG_PREBUILT_BIN|LLVM_PREBUILT_BIN|^LLVM=|^CC=|^LD=|^AR=' \
             "$CONFIG"
 
-      - name: Verify Neutron toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          export PATH="$NEUTRON_BIN:$PATH"
-
-          test "$(readlink -f "$(command -v clang)")" \
-            = "$NEUTRON_BIN/clang-24"
-
-          test "$(readlink -f "$(command -v clang++)")" \
-            = "$NEUTRON_BIN/clang-24"
-
-          test "$(readlink -f "$(command -v llvm-ar)")" \
-            = "$NEUTRON_BIN/llvm-ar"
-
-          test "$(readlink -f "$(command -v ld.lld)")" \
-            = "$NEUTRON_BIN/lld"
-
-          clang --version | tee \
-            "$GITHUB_WORKSPACE/neutron-clang-version.txt"
-
-          llvm-ar --version
-          ld.lld --version
-
-          grep -qiE \
-            'Neutron clang version 24|clang version 24' \
-            "$GITHUB_WORKSPACE/neutron-clang-version.txt"
-
       - name: Remove stale compiler metadata
         working-directory: kernel_workspace
         shell: bash
@@ -530,7 +551,7 @@ jobs:
             -name .version \
           ) -delete || true
 
-      - name: Build kernel with low memory mode
+      - name: Build kernel with Neutron Clang
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -538,6 +559,8 @@ jobs:
 
           export PATH="$NEUTRON_BIN:$PATH"
 
+          export CLANG_PREBUILT_BIN="$NEUTRON_BIN/"
+          export LLVM_PREBUILT_BIN="$NEUTRON_BIN/"
           export LLVM=1
           export LLVM_IAS=1
           export CC=clang
@@ -550,7 +573,8 @@ jobs:
           export OBJDUMP=llvm-objdump
           export READELF=llvm-readelf
           export STRIP=llvm-strip
-          export CLANG_PREBUILT_BIN="$NEUTRON_BIN/"
+
+          export LTO=thin
           export LLVM_PARALLEL_LINK_JOBS=1
           export LLVM_PARALLEL_COMPILE_JOBS=2
           export KBUILD_BUILD_USER=github-actions
@@ -565,6 +589,7 @@ jobs:
           BUILD_CONFIG=common/build.config.gki.aarch64 \
           USE_CCACHE=1 \
           CCACHE_DIR="$CCACHE_DIR" \
+          LTO=thin \
           build/build.sh -j2
 
       - name: Verify final compiler metadata
@@ -587,7 +612,7 @@ jobs:
           grep -qiE \
             'Neutron clang version 24|clang version 24' \
             "$COMPILE_H" || {
-              echo "::error::Final kernel metadata is not Neutron Clang 24"
+              echo "::error::Final kernel does not report Neutron Clang 24"
               exit 1
             }
 
@@ -606,21 +631,17 @@ jobs:
             "$COMPILE_H" \
             > "$GITHUB_WORKSPACE/build-info/compiler-proof.txt"
 
-          clang --version \
-            > "$GITHUB_WORKSPACE/build-info/toolchain-used.txt"
-
-          readlink -f "$(command -v clang)" \
-            > "$GITHUB_WORKSPACE/build-info/toolchain-path.txt"
-
       - name: Locate final Image
         working-directory: kernel_workspace
         shell: bash
         run: |
           set -euo pipefail
 
-          IMAGE="$(find out -type f \
-            ( -path '*/dist/Image' -o -name Image ) |
-            head -n1)"
+          IMAGE="$(
+            find out -type f \
+              ( -path '*/dist/Image' -o -name Image ) |
+            head -n1
+          )"
 
           test -f "$IMAGE"
 
@@ -644,7 +665,7 @@ jobs:
 
           cp "$IMAGE_PATH" ak3/Image
 
-          echo "Original Image:"
+          echo "Source Image:"
           sha256sum "$IMAGE_PATH"
 
           echo "Packaged Image:"
@@ -669,7 +690,6 @@ jobs:
           path: |
             *.zip
             build-info/**
-            neutron-clang-version.txt
           retention-days: 14
 
       - name: OOM diagnostics
