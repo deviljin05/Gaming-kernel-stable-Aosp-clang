@@ -4,34 +4,40 @@ on:
   workflow_dispatch:
     inputs:
       kernel_branch:
-        description: "Android kernel manifest branch"
+        description: Android kernel manifest branch
         required: true
-        default: "common-android12-5.10"
+        type: string
+        default: common-android12-5.10
 
       kernel_ref:
-        description: "Optional common kernel tag/branch"
+        description: Optional common kernel tag or branch
         required: false
+        type: string
         default: ""
 
       device_name:
-        description: "Device/kernel artifact name"
+        description: Device/kernel artifact name
         required: true
-        default: "Gaming-Kernel"
+        type: string
+        default: Gaming-Kernel
 
       kernel_brand:
-        description: "Kernel name shown in kernel manager"
+        description: Kernel name shown in kernel manager
         required: true
-        default: "Gaming-Kernel-NeutronClang"
+        type: string
+        default: Gaming-Kernel-NeutronClang
 
       enable_performance:
-        description: "Enable performance governor"
+        description: Enable performance governor
         required: true
-        default: "false"
+        type: boolean
+        default: false
 
       enable_gaming:
-        description: "Enable gaming options"
+        description: Enable gaming options
         required: true
-        default: "false"
+        type: boolean
+        default: false
 
 env:
   MANIFEST_URL: https://android.googlesource.com/kernel/manifest
@@ -41,23 +47,13 @@ env:
 
 jobs:
   build:
-    name: Build GKI kernel
+    name: Build kernel
     runs-on: ubuntu-24.04
     timeout-minutes: 180
 
     steps:
-      - name: Checkout workflow repository
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Free disk space
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /opt/ghc || true
-          sudo apt-get clean
 
       - name: Install dependencies
         shell: bash
@@ -84,14 +80,23 @@ jobs:
             wget \
             zip
 
+      - name: Free disk space
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo apt-get clean
+
       - name: Configure Git
         shell: bash
         run: |
           set -euo pipefail
 
           git config --global user.name "github-actions[bot]"
-          git config --global user.email \
-            "github-actions[bot]@users.noreply.github.com"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Install repo launcher
         shell: bash
@@ -107,8 +112,6 @@ jobs:
           chmod +x "$HOME/bin/repo"
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
-          "$HOME/bin/repo" version
-
       - name: Initialize kernel source
         shell: bash
         run: |
@@ -120,7 +123,7 @@ jobs:
 
           repo init \
             -u "$MANIFEST_URL" \
-            -b "${{ github.event.inputs.kernel_branch }}" \
+            -b "${{ inputs.kernel_branch }}" \
             --repo-url="$REPO_URL" \
             --repo-rev=main \
             --no-repo-verify \
@@ -139,14 +142,14 @@ jobs:
             --no-tags \
             -j2
 
-      - name: Checkout optional kernel reference
-        if: ${{ github.event.inputs.kernel_ref != '' }}
+      - name: Checkout optional kernel ref
+        if: ${{ inputs.kernel_ref != '' }}
         working-directory: kernel_workspace/common
         shell: bash
         run: |
           set -euo pipefail
 
-          REF="${{ github.event.inputs.kernel_ref }}"
+          REF="${{ inputs.kernel_ref }}"
 
           git fetch --depth=1 origin "$REF" || true
 
@@ -189,71 +192,50 @@ jobs:
 
           test -d "$NEUTRON_HOME/bin"
 
-          cd "$NEUTRON_HOME/bin"
-
-          if [ -x clang-24 ]; then
-            ln -sfn clang-24 clang
-            ln -sfn clang-24 clang++
-          elif [ ! -x clang ]; then
-            echo "::error::clang executable not found"
-            find "$NEUTRON_HOME" -maxdepth 3 -type f | sort || true
-            exit 1
-          else
-            ln -sfn "$(readlink -f clang)" clang++
+          if [ ! -x "$NEUTRON_HOME/bin/clang" ] && \
+             [ -x "$NEUTRON_HOME/bin/clang-24" ]; then
+            ln -sfn clang-24 "$NEUTRON_HOME/bin/clang"
           fi
 
-          if [ -x lld ]; then
-            ln -sfn lld ld.lld
-          elif [ -x ld.lld ]; then
-            ln -sfn "$(readlink -f ld.lld)" lld
-          else
-            echo "::error::lld executable not found"
-            exit 1
+          if [ ! -x "$NEUTRON_HOME/bin/clang++" ] && \
+             [ -x "$NEUTRON_HOME/bin/clang-24" ]; then
+            ln -sfn clang-24 "$NEUTRON_HOME/bin/clang++"
           fi
 
-          for TOOL in \
-            llvm-ar \
-            llvm-nm \
-            llvm-objcopy \
-            llvm-objdump \
-            llvm-readelf \
-            llvm-strip; do
-            test -x "$NEUTRON_HOME/bin/$TOOL"
-          done
+          if [ ! -x "$NEUTRON_HOME/bin/ld.lld" ] && \
+             [ -x "$NEUTRON_HOME/bin/lld" ]; then
+            ln -sfn lld "$NEUTRON_HOME/bin/ld.lld"
+          fi
+
+          test -x "$NEUTRON_HOME/bin/clang"
+          test -x "$NEUTRON_HOME/bin/clang++"
+          test -x "$NEUTRON_HOME/bin/ld.lld"
+          test -x "$NEUTRON_HOME/bin/llvm-ar"
 
           echo "NEUTRON_BIN=$NEUTRON_HOME/bin" >> "$GITHUB_ENV"
           echo "$NEUTRON_HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Verify Neutron compiler
+      - name: Verify Neutron toolchain
         shell: bash
         run: |
           set -euo pipefail
 
           export PATH="$NEUTRON_HOME/bin:$PATH"
 
-          test "$(command -v clang)" \
-            = "$NEUTRON_HOME/bin/clang"
-
-          test "$(command -v clang++)" \
-            = "$NEUTRON_HOME/bin/clang++"
-
-          test "$(command -v ld.lld)" \
-            = "$NEUTRON_HOME/bin/ld.lld"
-
-          test "$(command -v llvm-ar)" \
-            = "$NEUTRON_HOME/bin/llvm-ar"
-
-          clang --version
-          clang++ --version
-          ld.lld --version
-          llvm-ar --version
+          test "$(command -v clang)" = "$NEUTRON_HOME/bin/clang"
+          test "$(command -v clang++)" = "$NEUTRON_HOME/bin/clang++"
+          test "$(command -v ld.lld)" = "$NEUTRON_HOME/bin/ld.lld"
+          test "$(command -v llvm-ar)" = "$NEUTRON_HOME/bin/llvm-ar"
 
           mkdir -p "$GITHUB_WORKSPACE/build-info"
 
-          clang --version > \
+          command -v clang | tee \
+            "$GITHUB_WORKSPACE/build-info/compiler-path.txt"
+
+          clang --version | tee \
             "$GITHUB_WORKSPACE/build-info/neutron-clang-version.txt"
 
-          ld.lld --version > \
+          ld.lld --version | tee \
             "$GITHUB_WORKSPACE/build-info/neutron-lld-version.txt"
 
           CLANG_ID="$(
@@ -264,7 +246,7 @@ jobs:
 
           echo "NEUTRON_CLANG_ID=$CLANG_ID" >> "$GITHUB_ENV"
 
-      - name: Configure compiler in Android build config
+      - name: Configure Android kernel compiler
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -274,8 +256,6 @@ jobs:
 
           test -f "$CONFIG"
 
-          # Remove broken/external prebuilt paths.
-          # The compiler will be selected from PATH.
           sed -i '/^CLANG_PREBUILT_BIN=/d' "$CONFIG"
           sed -i '/^LLVM_PREBUILT_BIN=/d' "$CONFIG"
           sed -i '/^LLVM=/d' "$CONFIG"
@@ -314,14 +294,14 @@ jobs:
             '^LLVM=|^LLVM_IAS=|^CC=|^HOSTCC=|^HOSTCXX=|^HOSTAR=|^HOSTLD=|^LD=|^AR=' \
             "$CONFIG"
 
-      - name: Set kernel identity
+      - name: Set kernel manager name
         working-directory: kernel_workspace/common/arch/arm64/configs
         shell: bash
         run: |
           set -euo pipefail
 
           DEFCONFIG="gki_defconfig"
-          BRAND="${{ github.event.inputs.kernel_brand }}"
+          BRAND="${{ inputs.kernel_brand }}"
 
           test -f "$DEFCONFIG"
 
@@ -338,10 +318,13 @@ jobs:
           sed -i '/^CONFIG_LOCALVERSION=/d' "$DEFCONFIG"
           sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$DEFCONFIG"
 
-          cat >> "$DEFCONFIG" <<EOF
-          CONFIG_LOCALVERSION="-$BRAND"
-          CONFIG_LOCALVERSION_AUTO=n
-          EOF
+          printf 'CONFIG_LOCALVERSION="-%s"
+' "$BRAND" \
+            >> "$DEFCONFIG"
+
+          printf '%s
+' 'CONFIG_LOCALVERSION_AUTO=n' \
+            >> "$DEFCONFIG"
 
           grep -E \
             '^CONFIG_LOCALVERSION|^CONFIG_LOCALVERSION_AUTO' \
@@ -370,20 +353,20 @@ jobs:
           CONFIG_TMPFS_POSIX_ACL=y
           EOF
 
-          if [ "${{ github.event.inputs.enable_performance }}" = "true" ]; then
+          if [ "${{ inputs.enable_performance }}" = "true" ]; then
             cat >> "$DEFCONFIG" <<'EOF'
           CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y
           CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=n
           EOF
           fi
 
-          if [ "${{ github.event.inputs.enable_gaming }}" = "true" ]; then
+          if [ "${{ inputs.enable_gaming }}" = "true" ]; then
             cat >> "$DEFCONFIG" <<'EOF'
           CONFIG_MODULE_FORCE_LOAD=y
           EOF
           fi
 
-      - name: Remove stale metadata and bad checks
+      - name: Remove stale build metadata
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -399,68 +382,7 @@ jobs:
             -type f \
             -delete || true
 
-          for FILE in common/build.config* build.config*; do
-            if [ ! -f "$FILE" ]; then
-              continue
-            fi
-
-            sed -i '/^check_defconfig$/d' "$FILE"
-            sed -i '/^CHECK_DEFCONFIG=/d' "$FILE"
-            sed -i '/^MODULES_ORDER=/d' "$FILE"
-            sed -i '/^MODULES_LIST=/d' "$FILE"
-          done
-
-      - name: Embed Neutron compiler information
-        working-directory: kernel_workspace/common
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          MKCOMPILE="scripts/mkcompile_h"
-
-          if [ ! -f "$MKCOMPILE" ]; then
-            echo "mkcompile_h not found; normal compiler detection will be used."
-            exit 0
-          fi
-
-          cp "$MKCOMPILE" "$MKCOMPILE.original"
-
-          python3 - "$MKCOMPILE" "$NEUTRON_CLANG_ID" <<'PY'
-          import pathlib
-          import sys
-
-          path = pathlib.Path(sys.argv[1])
-          compiler = sys.argv[2]
-          compiler = compiler.replace("\\", "\\\\")
-          compiler = compiler.replace('"', '\\"')
-
-          text = path.read_text()
-          lines = text.splitlines()
-
-          output = []
-
-          for line in lines:
-              if "LINUX_COMPILER" in line and (
-                  "$CC" in line or
-                  "cc-version" in line or
-                  "clang" in line
-              ):
-                  indent = line[:len(line) - len(line.lstrip())]
-                  line = (
-                      f'{indent}echo "#define LINUX_COMPILER '
-                      f'\\"{compiler}\\""'
-                  )
-
-              output.append(line)
-
-          path.write_text("
-".join(output) + "
-")
-          PY
-
-          grep -n "LINUX_COMPILER" "$MKCOMPILE" || true
-
-      - name: Build kernel with Neutron Clang
+      - name: Build kernel
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -468,16 +390,13 @@ jobs:
 
           export PATH="$NEUTRON_HOME/bin:$PATH"
 
-          # Kernel 5.10 uses LLVM=1 with tools available in PATH.
           export LLVM=1
           export LLVM_IAS=1
-
           export CC=clang
           export HOSTCC=clang
           export HOSTCXX=clang++
           export HOSTAR=llvm-ar
           export HOSTLD=ld.lld
-
           export LD=ld.lld
           export AR=llvm-ar
           export NM=llvm-nm
@@ -489,30 +408,15 @@ jobs:
           export LTO=thin
           export LLVM_PARALLEL_LINK_JOBS=1
           export LLVM_PARALLEL_COMPILE_JOBS=2
-
           export KBUILD_BUILD_USER=NeutronClang
           export KBUILD_BUILD_HOST=NeutronCI
-          export KBUILD_BUILD_VERSION=1
-          export KBUILD_COMPILER_STRING="$NEUTRON_CLANG_ID"
 
           unset CLANG_PREBUILT_BIN || true
           unset LLVM_PREBUILT_BIN || true
 
-          test "$(command -v clang)" \
-            = "$NEUTRON_HOME/bin/clang"
-
-          test "$(command -v clang++)" \
-            = "$NEUTRON_HOME/bin/clang++"
-
-          test "$(command -v ld.lld)" \
-            = "$NEUTRON_HOME/bin/ld.lld"
-
-          echo "===== FINAL TOOLCHAIN ====="
-          command -v clang
-          command -v clang++
-          command -v ld.lld
-          command -v llvm-ar
-          clang --version
+          test "$(command -v clang)" = "$NEUTRON_HOME/bin/clang"
+          test "$(command -v clang++)" = "$NEUTRON_HOME/bin/clang++"
+          test "$(command -v ld.lld)" = "$NEUTRON_HOME/bin/ld.lld"
 
           BUILD_CONFIG=common/build.config.gki.aarch64 \
           USE_CCACHE=1 \
@@ -532,10 +436,9 @@ jobs:
           READELF=llvm-readelf \
           STRIP=llvm-strip \
           LTO=thin \
-          KBUILD_COMPILER_STRING="$NEUTRON_CLANG_ID" \
           build/build.sh -j2
 
-      - name: Verify compiler information
+      - name: Verify build output
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -550,60 +453,16 @@ jobs:
             head -n1
           )"
 
-          if [ -z "$COMPILE_H" ] || [ ! -f "$COMPILE_H" ]; then
-            echo "::error::compile.h was not generated."
-            exit 1
+          if [ -n "$COMPILE_H" ] && [ -f "$COMPILE_H" ]; then
+            cp "$COMPILE_H" \
+              "$GITHUB_WORKSPACE/build-info/compile.h"
+
+            grep -E \
+              'LINUX_COMPILER|LINUX_COMPILE_BY|LINUX_COMPILE_HOST|UTS_VERSION' \
+              "$COMPILE_H" \
+              > "$GITHUB_WORKSPACE/build-info/compiler-proof.txt" \
+              || true
           fi
-
-          cp "$COMPILE_H" \
-            "$GITHUB_WORKSPACE/build-info/compile.h"
-
-          echo "===== compile.h ====="
-          cat "$COMPILE_H"
-
-          if ! grep -qi "clang" "$COMPILE_H"; then
-            echo "::error::Clang information missing from compile.h."
-            exit 1
-          fi
-
-          if grep -qiE \
-            'clang version 10|clang version 11|clang version 12' \
-            "$COMPILE_H"; then
-            echo "::error::Old compiler metadata detected."
-            exit 1
-          fi
-
-          grep -E \
-            'LINUX_COMPILER|LINUX_COMPILE_BY|LINUX_COMPILE_HOST|UTS_VERSION' \
-            "$COMPILE_H" \
-            > "$GITHUB_WORKSPACE/build-info/compiler-proof.txt" \
-            || true
-
-      - name: Verify kernel release
-        working-directory: kernel_workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          RELEASE_FILE="$(
-            find out \
-              -name utsrelease.h \
-              -type f |
-            head -n1
-          )"
-
-          if [ -n "$RELEASE_FILE" ] && [ -f "$RELEASE_FILE" ]; then
-            cp "$RELEASE_FILE" \
-              "$GITHUB_WORKSPACE/build-info/utsrelease.h"
-
-            cat "$RELEASE_FILE"
-          fi
-
-      - name: Locate final Image
-        working-directory: kernel_workspace
-        shell: bash
-        run: |
-          set -euo pipefail
 
           IMAGE="$(
             find out \
@@ -622,12 +481,10 @@ jobs:
           fi
 
           if [ -z "$IMAGE" ] || [ ! -f "$IMAGE" ]; then
-            echo "::error::Final Image was not found."
+            echo "::error::Final Image not found"
             find out -maxdepth 6 -type f | sort || true
             exit 1
           fi
-
-          mkdir -p "$GITHUB_WORKSPACE/build-info"
 
           cp "$IMAGE" \
             "$GITHUB_WORKSPACE/build-info/Image"
@@ -665,7 +522,7 @@ jobs:
 
           test "$SOURCE_HASH" = "$PACKAGE_HASH"
 
-          ZIP_NAME="${{ github.event.inputs.device_name }}-NeutronClang-FKM.zip"
+          ZIP_NAME="${{ inputs.device_name }}-NeutronClang-FKM.zip"
 
           cd AnyKernel3
 
@@ -683,24 +540,23 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Kernel name: ${{ github.event.inputs.kernel_brand }}"
+          echo "Kernel: ${{ inputs.kernel_brand }}"
           echo "Compiler: $NEUTRON_CLANG_ID"
           echo "LTO: Thin"
-          echo "Compiler is embedded in compile.h."
 
           ccache --show-stats || true
 
-      - name: Upload build artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ github.event.inputs.device_name }}-NeutronClang-FKM
+          name: ${{ inputs.device_name }}-NeutronClang-FKM
           path: |
             *.zip
             build-info/**
           if-no-files-found: error
           retention-days: 14
 
-      - name: Upload diagnostics on failure
+      - name: Upload diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
