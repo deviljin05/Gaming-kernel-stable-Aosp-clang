@@ -466,7 +466,7 @@ jobs:
           chmod +x scripts/setlocalversion.orig
           cat > scripts/setlocalversion << 'EOF'
           #!/bin/sh
-          printf -- '-NeutronClang24-KSUNv1-STABLE'
+          printf -- '-NeutronClang-Latest-KSUNv1-STABLE'
           EOF
           chmod +x scripts/setlocalversion
 
@@ -490,8 +490,19 @@ jobs:
           chmod +x antman
           ./antman -S=latest
           echo "$NEUTRON_DIR/bin" >> "$GITHUB_PATH"
+
+      - name: Confirm Neutron Clang toolchain
+        run: |
+          set -euo pipefail
+          export PATH="$NEUTRON_DIR/bin:$PATH"
+          which clang
+          which llvm-ar
           clang --version
           llvm-ar --version
+          llvm-nm --version
+          llvm-objcopy --version
+          llvm-objdump --version
+          llvm-strip --version
 
       - name: Point GKI build scripts at Neutron Clang
         working-directory: kernel_workspace
@@ -514,6 +525,7 @@ jobs:
           export KMI_SYMBOL_LIST_STRICT_MODE=0
           export PATH="$NEUTRON_DIR/bin:$PATH"
           LTO=thin CC=clang LLVM=1 LLVM_IAS=1 \
+          AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
           BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" \
           build/build.sh -j"$(nproc)"
 
@@ -526,14 +538,6 @@ jobs:
           for SYM in CONFIG_NAMESPACES CONFIG_NET_NS CONFIG_PID_NS CONFIG_CGROUPS CONFIG_USER_NS; do
             grep -q "^${SYM}=y$" "$CFG"
           done
-
-      - name: Verify compiler branding
-        working-directory: kernel_workspace
-        run: |
-          set -euo pipefail
-          if [ -f out/compile_commands.json ]; then
-            grep -i "neutron-clang" -n out/compile_commands.json | head
-          fi
 
       - name: Locate built Image
         working-directory: kernel_workspace
@@ -552,7 +556,7 @@ jobs:
           git clone --depth=1 https://github.com/WildKernels/AnyKernel3.git -b gki-2.0 ak3
           cp "${{ env.IMG_PATH }}" ak3/Image
           cd ak3
-          zip -r9 -q "../${{ github.event.inputs.device_name }}-NeutronClang24-android12-5.10-susfs${SUSFS_COMMIT:0:8}.zip" . -x ".git*"
+          zip -r9 -q "../${{ github.event.inputs.device_name }}-NeutronClang-Latest-android12-5.10-susfs${SUSFS_COMMIT:0:8}.zip" . -x ".git*"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
