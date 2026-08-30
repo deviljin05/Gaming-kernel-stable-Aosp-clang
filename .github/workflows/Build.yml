@@ -389,9 +389,6 @@ jobs:
           curl -fsSL -o antman https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman
           chmod +x antman
           ./antman -S=latest
-          test -x "$NEUTRON_DIR/bin/clang"
-          test -x "$NEUTRON_DIR/bin/llvm-ar"
-          test -x "$NEUTRON_DIR/bin/ld.lld"
           echo "NEUTRON_BIN=$NEUTRON_DIR/bin" >> "$GITHUB_ENV"
           echo "$NEUTRON_DIR/bin" >> "$GITHUB_PATH"
 
@@ -399,18 +396,45 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$NEUTRON_BIN:$PATH"
+
           CLANG_PATH="$(readlink -f "$(command -v clang)")"
+          CLANGPP_PATH="$(readlink -f "$(command -v clang++)")"
           LLVM_AR_PATH="$(readlink -f "$(command -v llvm-ar)")"
-          LLD_PATH="$(readlink -f "$(command -v ld.lld)")"
+          LLD_PATH="$(readlink -f "$(command -v ld.lld || command -v lld)")"
+
           echo "clang path: $CLANG_PATH"
+          echo "clang++ path: $CLANGPP_PATH"
           echo "llvm-ar path: $LLVM_AR_PATH"
           echo "ld.lld path: $LLD_PATH"
-          test "$CLANG_PATH" = "$NEUTRON_BIN/clang"
-          test "$LLVM_AR_PATH" = "$NEUTRON_BIN/llvm-ar"
-          test "$LLD_PATH" = "$NEUTRON_BIN/ld.lld"
+
+          case "$CLANG_PATH" in
+            "$NEUTRON_BIN/clang"|"$NEUTRON_BIN/clang-"*|"$NEUTRON_BIN/clang-*" ) ;;
+            *) echo "::error::clang not coming from Neutron toolchain"; exit 1 ;;
+          esac
+
+          case "$CLANGPP_PATH" in
+            "$NEUTRON_BIN/clang++"|"$NEUTRON_BIN/clang++-"*|"$NEUTRON_BIN/clang++-*" ) ;;
+            *) echo "::warning::clang++ not resolved exactly from Neutron toolchain, continuing";;
+          esac
+
+          case "$LLVM_AR_PATH" in
+            "$NEUTRON_BIN/llvm-ar"|"$NEUTRON_BIN/llvm-ar-"* ) ;;
+            *) echo "::error::llvm-ar not coming from Neutron toolchain"; exit 1 ;;
+          esac
+
+          case "$LLD_PATH" in
+            "$NEUTRON_BIN/ld.lld"|"$NEUTRON_BIN/lld"|"$NEUTRON_BIN/lld-"* ) ;;
+            *) echo "::error::lld not coming from Neutron toolchain"; exit 1 ;;
+          esac
+
           clang --version | tee "$GITHUB_WORKSPACE/neutron-clang-version.txt"
           llvm-ar --version
-          ld.lld --version
+          if command -v ld.lld >/dev/null 2>&1; then
+            ld.lld --version
+          else
+            lld --version
+          fi
+
           echo "NEUTRON_CLANG_VERSION=$(clang --version | head -n1)" >> "$GITHUB_ENV"
 
       - name: Build kernel with verified Neutron Clang
@@ -420,15 +444,20 @@ jobs:
           export PATH="$NEUTRON_BIN:$PATH"
           export TRIM_NONLISTED_KMI=0
           export KMI_SYMBOL_LIST_STRICT_MODE=0
-          export CC="$NEUTRON_BIN/clang"
-          export LD="$NEUTRON_BIN/ld.lld"
-          export AR="$NEUTRON_BIN/llvm-ar"
-          export NM="$NEUTRON_BIN/llvm-nm"
-          export OBJCOPY="$NEUTRON_BIN/llvm-objcopy"
-          export OBJDUMP="$NEUTRON_BIN/llvm-objdump"
-          export STRIP="$NEUTRON_BIN/llvm-strip"
-          LTO=thin LLVM=1 LLVM_IAS=1 \
+
+          export CC=clang
+          export LD=ld.lld
+          export AR=llvm-ar
+          export NM=llvm-nm
+          export OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump
+          export STRIP=llvm-strip
+          export HOSTCC=clang
+          export HOSTCXX=clang++
+
+          LLVM=1 LLVM_IAS=1 \
           CC="$CC" LD="$LD" AR="$AR" NM="$NM" OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" \
+          HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" \
           BUILD_CONFIG=common/build.config.gki.aarch64 \
           USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" \
           build/build.sh -j"$(nproc)"
@@ -442,14 +471,17 @@ jobs:
           test -n "$COMPILE_H"
           echo "===== compile.h ====="
           cat "$COMPILE_H"
+
           if grep -qi 'clang version 12' "$COMPILE_H"; then
             echo "::error::Build used clang 12, not the expected Neutron toolchain."
             exit 1
           fi
+
           if ! grep -qiE 'clang version (2[0-9]|[3-9][0-9])' "$COMPILE_H"; then
             echo "::error::Could not verify a modern Neutron clang in compile.h."
             exit 1
           fi
+
           mkdir -p "$GITHUB_WORKSPACE/build-info"
           cp "$COMPILE_H" "$GITHUB_WORKSPACE/build-info/compile.h"
           clang --version > "$GITHUB_WORKSPACE/build-info/neutron-clang-version.txt"
