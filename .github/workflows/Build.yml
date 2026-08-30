@@ -403,30 +403,37 @@ jobs:
           grep -rl '^MODULES_ORDER=' build.config* 2>/dev/null | xargs -r sed -i 's/^MODULES_ORDER=.*/MODULES_ORDER=/' || true
           grep -rl '^MODULES_LIST=' build.config* 2>/dev/null | xargs -r sed -i 's/^MODULES_LIST=.*/MODULES_LIST=/' || true
 
-      - name: Force Neutron Clang (strip AOSP prebuilt clang override)
+      - name: Force Neutron Clang (redirect AOSP prebuilt clang path to Neutron)
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
           # build.config* hardcodes CLANG_PREBUILT_BIN pointing at the AOSP prebuilt
-          # clang that `repo sync` fetched. build/build.sh does:
-          #   if [ -n "${CLANG_PREBUILT_BIN}" ]; then
-          #     PATH=${ROOT_DIR}/${CLANG_PREBUILT_BIN}:${PATH}
-          #   fi
-          # which prepends that AOSP clang AHEAD of our Neutron Clang, so the
-          # kernel actually gets compiled (and its version banner stamped) with
-          # the AOSP toolchain instead of Neutron. Blanking these vars makes
-          # build.sh's guard skip that PATH prepend, so our PATH (which already
-          # has Neutron Clang first) is what actually gets used.
+          # clang that `repo sync` fetched, and build/build.sh builds its OWN
+          # hermetic PATH out of these vars (it does not just rely on the PATH
+          # inherited from earlier steps/GITHUB_PATH). So:
+          #   - leaving CLANG_PREBUILT_BIN as-is  -> AOSP clang gets used (wrong version)
+          #   - blanking CLANG_PREBUILT_BIN       -> no clang at all in build.sh's
+          #                                          PATH -> "clang: not found"
+          # The correct fix is to make CLANG_PREBUILT_BIN itself point at Neutron
+          # Clang. build.sh joins it as ${ROOT_DIR}/${CLANG_PREBUILT_BIN}, and
+          # ROOT_DIR here is this kernel_workspace directory, so we create a
+          # symlink inside kernel_workspace and point the var at that (relative)
+          # symlink path instead of an absolute path.
+          ln -sfn "${TOOLCHAIN_DIR}" ./neutron-clang
+
           find . -name 'build.config*' -print0 2>/dev/null | while IFS= read -r -d '' f; do
             if grep -q '^CLANG_PREBUILT_BIN=' "$f"; then
-              sed -i 's/^CLANG_PREBUILT_BIN=.*/CLANG_PREBUILT_BIN=/' "$f"
-              echo "neutralized CLANG_PREBUILT_BIN in $f"
+              sed -i 's#^CLANG_PREBUILT_BIN=.*#CLANG_PREBUILT_BIN=neutron-clang/bin#' "$f"
+              echo "redirected CLANG_PREBUILT_BIN in $f -> neutron-clang/bin"
             fi
             if grep -q '^LLVM_PREBUILT_BIN=' "$f"; then
-              sed -i 's/^LLVM_PREBUILT_BIN=.*/LLVM_PREBUILT_BIN=/' "$f"
-              echo "neutralized LLVM_PREBUILT_BIN in $f"
+              sed -i 's#^LLVM_PREBUILT_BIN=.*#LLVM_PREBUILT_BIN=neutron-clang/bin#' "$f"
+              echo "redirected LLVM_PREBUILT_BIN in $f -> neutron-clang/bin"
             fi
           done
+
+          # Sanity check: the resolved path must actually contain clang.
+          test -x "./neutron-clang/bin/clang"
 
       - name: Build kernel
         working-directory: kernel_workspace
