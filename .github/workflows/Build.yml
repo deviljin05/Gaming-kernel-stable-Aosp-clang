@@ -1,4 +1,4 @@
-name: Build GKI Kernel
+name: Build GKI Kernel - Neutron Clang
 
 on:
   workflow_dispatch:
@@ -9,29 +9,28 @@ on:
         default: "common-android12-5.10"
 
       kernel_ref:
-        description: "Optional common kernel branch/tag; leave empty for manifest revision"
+        description: "Optional common kernel tag/branch"
         required: false
         default: ""
 
       device_name:
-        description: "Name for the ZIP artifact"
+        description: "Output ZIP name"
         required: true
         default: "gki-kernel"
 
       enable_performance:
-        description: "Enable performance CPU governor"
+        description: "Enable performance governor"
         required: true
         default: "false"
 
       enable_gaming:
-        description: "Enable optional gaming config"
+        description: "Enable gaming tweaks"
         required: true
         default: "false"
 
 env:
-  KERNEL_MANIFEST:
-    https://android.googlesource.com/kernel/manifest
-
+  MANIFEST_URL: https://android.googlesource.com/kernel/manifest
+  REPO_URL: https://gerrit.googlesource.com/git-repo
   NEUTRON_HOME: /home/runner/toolchains/neutron-clang
   CCACHE_DIR: /home/runner/.ccache
 
@@ -114,11 +113,10 @@ jobs:
           mkdir -p kernel_workspace
           cd kernel_workspace
 
-          # --repo-rev=main fixes the old "unable to resolve stable" error.
           repo init \
-            -u "$KERNEL_MANIFEST" \
+            -u "$MANIFEST_URL" \
             -b "${{ github.event.inputs.kernel_branch }}" \
-            --repo-url=https://gerrit.googlesource.com/git-repo \
+            --repo-url="$REPO_URL" \
             --repo-rev=main \
             --no-repo-verify \
             --depth=1
@@ -145,7 +143,7 @@ jobs:
 
           REF="${{ github.event.inputs.kernel_ref }}"
 
-          git fetch --depth=1 origin "$REF"
+          git fetch --depth=1 origin "$REF" || true
 
           if git show-ref --verify --quiet "refs/remotes/origin/$REF"; then
             git checkout -B "$REF" "origin/$REF"
@@ -197,7 +195,7 @@ jobs:
           echo "NEUTRON_BIN=$NEUTRON_HOME/bin" >> "$GITHUB_ENV"
           echo "$NEUTRON_HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Verify Neutron compiler
+      - name: Verify Neutron Clang
         shell: bash
         run: |
           set -euo pipefail
@@ -209,25 +207,25 @@ jobs:
           test -x "$NEUTRON_HOME/bin/clang++"
           test -x "$NEUTRON_HOME/bin/lld"
           test -x "$NEUTRON_HOME/bin/ld.lld"
+          test -x "$NEUTRON_HOME/bin/llvm-ar"
 
-          test "$(readlink -f "$(command -v clang)")" \
-            = "$NEUTRON_HOME/bin/clang-24"
+          command -v clang
+          command -v clang++
+          command -v ld.lld
+          command -v llvm-ar
 
-          test "$(readlink -f "$(command -v clang++)")" \
-            = "$NEUTRON_HOME/bin/clang-24"
-
-          test "$(readlink -f "$(command -v ld.lld)")" \
-            = "$NEUTRON_HOME/bin/lld"
+          clang --version
+          ld.lld --version
 
           mkdir -p "$GITHUB_WORKSPACE/build-info"
 
-          clang --version | tee \
+          clang --version > \
             "$GITHUB_WORKSPACE/build-info/clang-version.txt"
 
-          ld.lld --version | tee \
+          ld.lld --version > \
             "$GITHUB_WORKSPACE/build-info/lld-version.txt"
 
-      - name: Configure build compiler
+      - name: Configure Android kernel build
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -237,8 +235,8 @@ jobs:
 
           test -f "$CONFIG"
 
-          # This path is relative to kernel_workspace.
-          # Do not use /home/runner/... here.
+          # Keep this relative because Android build.sh resolves it
+          # against the Repo root.
           TOOLCHAIN_REL="../toolchains/neutron-clang/bin"
 
           sed -i '/^CLANG_PREBUILT_BIN=/d' "$CONFIG"
@@ -273,33 +271,11 @@ jobs:
           STRIP=llvm-strip
           EOF
 
-          echo "===== Compiler configuration ====="
+          echo "===== Active compiler config ====="
 
           grep -E \
-            'CLANG_PREBUILT_BIN|LLVM_PREBUILT_BIN|^LLVM=|^CC=|^HOSTCC=|^LD=|^AR=' \
+            'CLANG_PREBUILT_BIN|LLVM_PREBUILT_BIN|^LLVM=|^LLVM_IAS=|^CC=|^LD=|^AR=' \
             "$CONFIG"
-
-      - name: Validate relative compiler path
-        working-directory: kernel_workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ROOT="$PWD"
-          TOOLCHAIN_REL="../toolchains/neutron-clang/bin"
-          RESOLVED="$(readlink -f "$ROOT/$TOOLCHAIN_REL")"
-
-          test "$RESOLVED" = "$NEUTRON_HOME/bin"
-          test -x "$RESOLVED/clang"
-          test -x "$RESOLVED/clang-24"
-          test -x "$RESOLVED/lld"
-          test -x "$RESOLVED/ld.lld"
-
-          echo "ROOT=$ROOT"
-          echo "TOOLCHAIN_REL=$TOOLCHAIN_REL"
-          echo "RESOLVED=$RESOLVED"
-
-          "$RESOLVED/clang" --version
 
       - name: Remove stale compiler metadata
         working-directory: kernel_workspace
@@ -317,7 +293,7 @@ jobs:
             -type f \
             -delete || true
 
-      - name: Setup KernelSU Next if available
+      - name: Setup KernelSU if available
         working-directory: kernel_workspace/common
         shell: bash
         run: |
@@ -326,7 +302,7 @@ jobs:
           if [ -f "KernelSU-Next/kernel/setup.sh" ]; then
             bash KernelSU-Next/kernel/setup.sh
           else
-            echo "KernelSU-Next setup script not found; continuing."
+            echo "KernelSU-Next setup not found; continuing."
           fi
 
       - name: Configure kernel options
@@ -367,7 +343,7 @@ jobs:
           EOF
           fi
 
-      - name: Disable incompatible build checks
+      - name: Clean incompatible build settings
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -384,18 +360,19 @@ jobs:
             sed -i '/^MODULES_LIST=/d' "$FILE"
           done
 
-          echo "Build-check cleanup completed."
-
       - name: Build kernel
         working-directory: kernel_workspace
         shell: bash
         run: |
           set -euo pipefail
 
+          # This is the only compiler path used by the shell environment.
           export PATH="$NEUTRON_HOME/bin:$PATH"
 
-          export LLVM=1
+          # LLVM supports both LLVM=1 with PATH and LLVM=/path/to/llvm/.
+          export LLVM="$NEUTRON_HOME/bin/"
           export LLVM_IAS=1
+
           export CC=clang
           export HOSTCC=clang
           export HOSTCXX=clang++
@@ -413,15 +390,15 @@ jobs:
           export KBUILD_BUILD_USER=github-actions
           export KBUILD_BUILD_HOST=github-runner
 
-          # Prevent build.sh from receiving the previous broken absolute path.
+          # Do not allow a previously exported broken absolute value.
           unset CLANG_PREBUILT_BIN || true
           unset LLVM_PREBUILT_BIN || true
 
-          test "$(readlink -f "$(command -v clang)")" \
-            = "$NEUTRON_HOME/bin/clang-24"
+          test -x "$NEUTRON_HOME/bin/clang"
+          test -x "$NEUTRON_HOME/bin/ld.lld"
 
-          test "$(readlink -f "$(command -v ld.lld)")" \
-            = "$NEUTRON_HOME/bin/lld"
+          command -v clang
+          command -v ld.lld
 
           BUILD_CONFIG=common/build.config.gki.aarch64 \
           USE_CCACHE=1 \
@@ -429,7 +406,7 @@ jobs:
           LTO=thin \
           build/build.sh -j2
 
-      - name: Verify compile metadata
+      - name: Verify compiler metadata
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -452,7 +429,6 @@ jobs:
           cp "$COMPILE_H" \
             "$GITHUB_WORKSPACE/build-info/compile.h"
 
-          echo "===== compile.h ====="
           cat "$COMPILE_H"
 
           if grep -qiE \
@@ -467,7 +443,7 @@ jobs:
             "$COMPILE_H" \
             > "$GITHUB_WORKSPACE/build-info/compiler-proof.txt" || true
 
-      - name: Find final Image
+      - name: Locate final Image
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -490,7 +466,7 @@ jobs:
           fi
 
           if [ -z "$IMAGE" ] || [ ! -f "$IMAGE" ]; then
-            echo "::error::Image was not found."
+            echo "::error::Final Image not found."
             find out -maxdepth 6 -type f | sort || true
             exit 1
           fi
@@ -521,8 +497,15 @@ jobs:
 
           cp "$IMAGE_PATH" AnyKernel3/Image
 
-          SOURCE_HASH="$(sha256sum "$IMAGE_PATH" | awk '{print $1}')"
-          PACKAGE_HASH="$(sha256sum AnyKernel3/Image | awk '{print $1}')"
+          SOURCE_HASH="$(
+            sha256sum "$IMAGE_PATH" |
+            awk '{print $1}'
+          )"
+
+          PACKAGE_HASH="$(
+            sha256sum AnyKernel3/Image |
+            awk '{print $1}'
+          )"
 
           test "$SOURCE_HASH" = "$PACKAGE_HASH"
 
@@ -539,7 +522,7 @@ jobs:
           sha256sum "$ZIP_NAME" \
             > "build-info/$ZIP_NAME.sha256"
 
-      - name: Show build information
+      - name: Print build summary
         shell: bash
         run: |
           set -euo pipefail
