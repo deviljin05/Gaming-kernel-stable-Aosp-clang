@@ -23,6 +23,10 @@ on:
         description: "Force CPU default governor to 'performance' instead of stock 'schedutil'. Real tradeoff: noticeably higher battery/heat, not a free win — leave 'false' unless you specifically want it. Off by default."
         required: true
         default: "false"
+      compiler_release:
+        description: "Neutron Clang release tag (leave empty for latest)"
+        required: false
+        default: ""
 
 env:
   VERSION: android12-5.10
@@ -69,7 +73,11 @@ jobs:
           cd "$TOOLCHAIN_DIR"
           curl -fsSL -o antman https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman
           chmod +x antman
-          ./antman -S
+          if [ -n "${{ github.event.inputs.compiler_release }}" ]; then
+            ./antman -S="${{ github.event.inputs.compiler_release }}"
+          else
+            ./antman -S
+          fi
           ./antman --patch=glibc
 
       - name: Export toolchain paths
@@ -81,19 +89,21 @@ jobs:
           set -euo pipefail
           cd "$TOOLCHAIN_DIR"
           ./antman -I || true
-          echo "=== clang ==="
+          echo "=== Neutron Clang path ==="
           which clang
+          echo "=== Neutron Clang version ==="
           clang --version
-          echo "=== ld.lld ==="
+          echo "=== LLVM tools ==="
           which ld.lld
           ld.lld --version
-          echo "=== llvm tools ==="
           llvm-ar --version
           llvm-nm --version
           llvm-objcopy --version
           llvm-objdump --version
           llvm-readelf --version
           llvm-strip --version
+          echo "=== compiler sanity check ==="
+          clang -dM -E -x c /dev/null | grep -E '__clang_major__|__clang_minor__|__clang_patchlevel__' || true
 
       - name: Resolve manifest branch and optional pinned release tag
         run: |
@@ -429,7 +439,7 @@ jobs:
             'const_debug unsigned int sysctl_sched_migration_cost = 250000UL;' \
             kernel/sched/fair.c || true
 
-          patch_default "DEFAULT_MAX_MAP_COUNT (USHRT_MAX-5)->1048576" \
+          patch_default "DEFAULT_MAX_MAP_COUNT 65530->1048576" \
             '#define[[:space:]]+DEFAULT_MAX_MAP_COUNT[[:space:]]*([[:space:]]*USHRT_MAX[[:space:]]*-[[:space:]]*MAPCOUNT_ELF_CORE_MARGIN[[:space:]]*)' \
             '#define DEFAULT_MAX_MAP_COUNT (1048576)' \
             include/linux/mm.h || true
@@ -462,9 +472,10 @@ jobs:
           chmod +x scripts/setlocalversion.orig
           cat > scripts/setlocalversion << 'EOF'
           #!/bin/sh
-          printf -- '-BLAZE-KSUNv1-STABLE'
+          printf -- '-BLAZE-KSUNv1-STABLE-NeutronClang'
           EOF
           chmod +x scripts/setlocalversion
+          echo 'CONFIG_LOCALVERSION="-NeutronClang"' >> arch/arm64/configs/gki_defconfig
 
       - name: Disable strict defconfig verification
         working-directory: kernel_workspace
@@ -500,15 +511,26 @@ jobs:
           CCACHE_DIR="${CCACHE_DIR}" \
           build/build.sh -j"$(nproc)"
 
-      - name: Verify final configs
+      - name: Verify compiler used in build config
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
           CFG=$(find out -name ".config" | head -n1)
           [ -n "$CFG" ]
-          for SYM in CONFIG_NAMESPACES CONFIG_NET_NS CONFIG_PID_NS CONFIG_CGROUPS CONFIG_USER_NS; do
-            grep -q "^${SYM}=y$" "$CFG"
-          done
+          grep -q '^CONFIG_CC_IS_CLANG=y$' "$CFG"
+          grep -q '^CONFIG_CLANG_VERSION=' "$CFG"
+          ! grep -q 'gcc' "$CFG" || true
+
+      - name: Verify final runtime identity strings
+        working-directory: kernel_workspace
+        run: |
+          set -euo pipefail
+          IMG=$(find out -path "*dist/Image" | head -n1)
+          if [ -z "$IMG" ]; then
+            IMG=$(find out -name "Image" | head -n1)
+          fi
+          [ -n "$IMG" ]
+          strings "$IMG" | grep -Ei 'clang|neutron|llvm' | head -n 50
 
       - name: Locate built Image
         working-directory: kernel_workspace
