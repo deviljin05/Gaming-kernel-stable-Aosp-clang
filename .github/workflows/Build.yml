@@ -530,12 +530,13 @@ jobs:
           fi
           [ -n "$IMG" ]
           TMP_STRINGS="$(mktemp)"
+          trap 'rm -f "$TMP_STRINGS"' EXIT
           strings "$IMG" > "$TMP_STRINGS"
           if ! grep -Eqi 'clang|neutron|llvm' "$TMP_STRINGS"; then
             echo "No clang/neutron/llvm strings found in Image"
             exit 1
           fi
-          grep -Eai 'clang|neutron|llvm' "$TMP_STRINGS" | head -n 50
+          grep -Eai -m 50 'clang|neutron|llvm' "$TMP_STRINGS"
 
       - name: Locate built Image
         working-directory: kernel_workspace
