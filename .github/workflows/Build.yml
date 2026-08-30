@@ -407,18 +407,33 @@ jobs:
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          # build.config* hardcodes CLANG_PREBUILT_BIN pointing at the AOSP prebuilt
-          # clang that `repo sync` fetched, and build/build.sh builds its OWN
-          # hermetic PATH out of these vars (it does not just rely on the PATH
-          # inherited from earlier steps/GITHUB_PATH). So:
-          #   - leaving CLANG_PREBUILT_BIN as-is  -> AOSP clang gets used (wrong version)
-          #   - blanking CLANG_PREBUILT_BIN       -> no clang at all in build.sh's
-          #                                          PATH -> "clang: not found"
-          # The correct fix is to make CLANG_PREBUILT_BIN itself point at Neutron
-          # Clang. build.sh joins it as ${ROOT_DIR}/${CLANG_PREBUILT_BIN}, and
-          # ROOT_DIR here is this kernel_workspace directory, so we create a
-          # symlink inside kernel_workspace and point the var at that (relative)
-          # symlink path instead of an absolute path.
+          # ---------------------------------------------------------------
+          # Root cause (confirmed from the real AOSP build/_setup_env.sh):
+          #
+          #   PREBUILTS_PATHS=( ... CLANG_PREBUILT_BIN ... )
+          #   for PREBUILT_BIN in "${PREBUILTS_PATHS[@]}"; do
+          #     PREBUILT_BIN=${!PREBUILT_BIN}
+          #     if [ -n "${PREBUILT_BIN}" ]; then
+          #       PATH=${ROOT_DIR}/${PREBUILT_BIN}:${PATH}
+          #     fi
+          #   done
+          #
+          # build.config.common hardcodes CLANG_PREBUILT_BIN pointing at the
+          # AOSP prebuilt clang that `repo sync` fetched. Whatever that
+          # variable resolves to gets PREPENDED to PATH ahead of everything
+          # else (including our Neutron Clang from GITHUB_PATH) - so:
+          #   - leaving it as-is -> AOSP clang wins (wrong compiler version)
+          #   - blanking it      -> the prepend is skipped entirely, and if
+          #                         anything else clears/shadows PATH first,
+          #                         you get "clang: not found"
+          #
+          # The correct, officially-consistent fix is to make
+          # CLANG_PREBUILT_BIN itself resolve to Neutron Clang, so the exact
+          # directory _setup_env.sh prepends to PATH IS Neutron's bin/. Since
+          # ROOT_DIR = this kernel_workspace directory, we symlink Neutron's
+          # toolchain into kernel_workspace and point the var at that relative
+          # symlink path.
+          # ---------------------------------------------------------------
           ln -sfn "${TOOLCHAIN_DIR}" ./neutron-clang
 
           find . -name 'build.config*' -print0 2>/dev/null | while IFS= read -r -d '' f; do
@@ -426,14 +441,25 @@ jobs:
               sed -i 's#^CLANG_PREBUILT_BIN=.*#CLANG_PREBUILT_BIN=neutron-clang/bin#' "$f"
               echo "redirected CLANG_PREBUILT_BIN in $f -> neutron-clang/bin"
             fi
-            if grep -q '^LLVM_PREBUILT_BIN=' "$f"; then
-              sed -i 's#^LLVM_PREBUILT_BIN=.*#LLVM_PREBUILT_BIN=neutron-clang/bin#' "$f"
-              echo "redirected LLVM_PREBUILT_BIN in $f -> neutron-clang/bin"
-            fi
           done
 
-          # Sanity check: the resolved path must actually contain clang.
-          test -x "./neutron-clang/bin/clang"
+          # --- Sanity checks (fail fast, before the ~1h build even starts) ---
+
+          # 1) The symlink must actually resolve to a real clang binary.
+          test -x "./neutron-clang/bin/clang" || {
+            echo "::error::neutron-clang/bin/clang not found via the symlink"; exit 1;
+          }
+
+          # 2) Simulate _setup_env.sh's exact PATH-prepend (ROOT_DIR/CLANG_PREBUILT_BIN:$PATH)
+          #    and confirm `clang` resolves inside OUR directory, not anywhere else.
+          SIM_PATH="$(pwd)/neutron-clang/bin:${PATH}"
+          RESOLVED_CLANG="$(PATH="$SIM_PATH" command -v clang)"
+          echo "Simulated resolution -> clang: ${RESOLVED_CLANG}"
+          case "${RESOLVED_CLANG}" in
+            "$(pwd)/neutron-clang/bin/clang") ;;
+            *) echo "::error::clang would NOT resolve to Neutron Clang (got: ${RESOLVED_CLANG})"; exit 1 ;;
+          esac
+          PATH="$SIM_PATH" clang --version
 
       - name: Build kernel
         working-directory: kernel_workspace
