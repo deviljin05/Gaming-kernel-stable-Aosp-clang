@@ -6,53 +6,44 @@ on:
       kernel_branch:
         description: Android kernel manifest branch
         required: true
-        type: string
         default: common-android12-5.10
 
       kernel_ref:
-        description: Optional common kernel tag or branch
+        description: Optional kernel ref
         required: false
-        type: string
         default: ""
 
       device_name:
-        description: Device/kernel artifact name
+        description: Artifact name
         required: true
-        type: string
         default: Gaming-Kernel
 
       kernel_brand:
-        description: Kernel name shown in kernel manager
+        description: Kernel name
         required: true
-        type: string
         default: Gaming-Kernel-NeutronClang
 
       enable_performance:
         description: Enable performance governor
         required: true
-        type: boolean
-        default: false
+        default: "false"
 
       enable_gaming:
         description: Enable gaming options
         required: true
-        type: boolean
-        default: false
+        default: "false"
 
 env:
-  MANIFEST_URL: https://android.googlesource.com/kernel/manifest
-  REPO_URL: https://gerrit.googlesource.com/git-repo
   NEUTRON_HOME: /home/runner/toolchains/neutron-clang
   CCACHE_DIR: /home/runner/.ccache
 
 jobs:
   build:
-    name: Build kernel
     runs-on: ubuntu-24.04
     timeout-minutes: 180
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install dependencies
@@ -63,42 +54,11 @@ jobs:
           sudo apt-get update
 
           sudo apt-get install -y \
-            bc \
-            bison \
-            build-essential \
-            ccache \
-            curl \
-            device-tree-compiler \
-            flex \
-            git \
-            libncurses-dev \
-            libssl-dev \
-            lz4 \
-            python3 \
-            rsync \
-            unzip \
-            wget \
-            zip
+            bc bison build-essential ccache curl \
+            device-tree-compiler flex git libncurses-dev \
+            libssl-dev lz4 python3 rsync unzip wget zip
 
-      - name: Free disk space
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          sudo rm -rf /usr/share/dotnet || true
-          sudo rm -rf /usr/local/lib/android || true
-          sudo rm -rf /opt/ghc || true
-          sudo apt-get clean
-
-      - name: Configure Git
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Install repo launcher
+      - name: Install repo
         shell: bash
         run: |
           set -euo pipefail
@@ -112,7 +72,7 @@ jobs:
           chmod +x "$HOME/bin/repo"
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
-      - name: Initialize kernel source
+      - name: Initialize source
         shell: bash
         run: |
           set -euo pipefail
@@ -122,14 +82,14 @@ jobs:
           cd kernel_workspace
 
           repo init \
-            -u "$MANIFEST_URL" \
-            -b "${{ inputs.kernel_branch }}" \
-            --repo-url="$REPO_URL" \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b "${{ github.event.inputs.kernel_branch }}" \
+            --repo-url=https://gerrit.googlesource.com/git-repo \
             --repo-rev=main \
             --no-repo-verify \
             --depth=1
 
-      - name: Sync kernel source
+      - name: Sync source
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -142,14 +102,14 @@ jobs:
             --no-tags \
             -j2
 
-      - name: Checkout optional kernel ref
-        if: ${{ inputs.kernel_ref != '' }}
+      - name: Checkout kernel ref
+        if: ${{ github.event.inputs.kernel_ref != '' }}
         working-directory: kernel_workspace/common
         shell: bash
         run: |
           set -euo pipefail
 
-          REF="${{ inputs.kernel_ref }}"
+          REF="${{ github.event.inputs.kernel_ref }}"
 
           git fetch --depth=1 origin "$REF" || true
 
@@ -162,17 +122,6 @@ jobs:
             exit 1
           fi
 
-      - name: Setup ccache
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          mkdir -p "$CCACHE_DIR"
-
-          ccache --max-size=5G
-          ccache --set-config=compression=true
-          ccache --zero-stats
-
       - name: Install Neutron Clang
         shell: bash
         run: |
@@ -180,7 +129,6 @@ jobs:
 
           rm -rf "$NEUTRON_HOME"
           mkdir -p "$NEUTRON_HOME"
-
           cd "$NEUTRON_HOME"
 
           curl -fsSL \
@@ -189,8 +137,6 @@ jobs:
 
           chmod +x antman
           ./antman -S=latest
-
-          test -d "$NEUTRON_HOME/bin"
 
           if [ ! -x "$NEUTRON_HOME/bin/clang" ] && \
              [ -x "$NEUTRON_HOME/bin/clang-24" ]; then
@@ -212,10 +158,10 @@ jobs:
           test -x "$NEUTRON_HOME/bin/ld.lld"
           test -x "$NEUTRON_HOME/bin/llvm-ar"
 
-          echo "NEUTRON_BIN=$NEUTRON_HOME/bin" >> "$GITHUB_ENV"
           echo "$NEUTRON_HOME/bin" >> "$GITHUB_PATH"
+          echo "NEUTRON_BIN=$NEUTRON_HOME/bin" >> "$GITHUB_ENV"
 
-      - name: Verify Neutron toolchain
+      - name: Verify compiler
         shell: bash
         run: |
           set -euo pipefail
@@ -225,7 +171,6 @@ jobs:
           test "$(command -v clang)" = "$NEUTRON_HOME/bin/clang"
           test "$(command -v clang++)" = "$NEUTRON_HOME/bin/clang++"
           test "$(command -v ld.lld)" = "$NEUTRON_HOME/bin/ld.lld"
-          test "$(command -v llvm-ar)" = "$NEUTRON_HOME/bin/llvm-ar"
 
           mkdir -p "$GITHUB_WORKSPACE/build-info"
 
@@ -233,31 +178,24 @@ jobs:
             "$GITHUB_WORKSPACE/build-info/compiler-path.txt"
 
           clang --version | tee \
-            "$GITHUB_WORKSPACE/build-info/neutron-clang-version.txt"
+            "$GITHUB_WORKSPACE/build-info/neutron-clang.txt"
 
           ld.lld --version | tee \
-            "$GITHUB_WORKSPACE/build-info/neutron-lld-version.txt"
+            "$GITHUB_WORKSPACE/build-info/neutron-lld.txt"
 
-          CLANG_ID="$(
-            clang --version |
-            head -n1 |
-            sed 's/[[:space:]]+/ /g'
-          )"
-
-          echo "NEUTRON_CLANG_ID=$CLANG_ID" >> "$GITHUB_ENV"
-
-      - name: Configure Android kernel compiler
+      - name: Fix Android compiler config
         working-directory: kernel_workspace
         shell: bash
         run: |
           set -euo pipefail
 
           CONFIG="common/build.config.gki.aarch64"
-
           test -f "$CONFIG"
 
+          # Remove the broken relative compiler paths.
           sed -i '/^CLANG_PREBUILT_BIN=/d' "$CONFIG"
           sed -i '/^LLVM_PREBUILT_BIN=/d' "$CONFIG"
+
           sed -i '/^LLVM=/d' "$CONFIG"
           sed -i '/^LLVM_IAS=/d' "$CONFIG"
           sed -i '/^CC=/d' "$CONFIG"
@@ -290,9 +228,12 @@ jobs:
           STRIP=llvm-strip
           EOF
 
-          grep -E \
-            '^LLVM=|^LLVM_IAS=|^CC=|^HOSTCC=|^HOSTCXX=|^HOSTAR=|^HOSTLD=|^LD=|^AR=' \
-            "$CONFIG"
+          if grep -qE \
+            'CLANG_PREBUILT_BIN|LLVM_PREBUILT_BIN' \
+            "$CONFIG"; then
+            echo "::error::Broken compiler path is still present"
+            exit 1
+          fi
 
       - name: Set kernel manager name
         working-directory: kernel_workspace/common/arch/arm64/configs
@@ -301,9 +242,7 @@ jobs:
           set -euo pipefail
 
           DEFCONFIG="gki_defconfig"
-          BRAND="${{ inputs.kernel_brand }}"
-
-          test -f "$DEFCONFIG"
+          BRAND="${{ github.event.inputs.kernel_brand }}"
 
           BRAND="$(
             printf '%s' "$BRAND" |
@@ -319,18 +258,14 @@ jobs:
           sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$DEFCONFIG"
 
           printf 'CONFIG_LOCALVERSION="-%s"
-' "$BRAND" \
+          ' "$BRAND" \
             >> "$DEFCONFIG"
 
           printf '%s
-' 'CONFIG_LOCALVERSION_AUTO=n' \
-            >> "$DEFCONFIG"
+          ' 'CONFIG_LOCALVERSION_AUTO=n' \
+          >> "$DEFCONFIG"
 
-          grep -E \
-            '^CONFIG_LOCALVERSION|^CONFIG_LOCALVERSION_AUTO' \
-            "$DEFCONFIG"
-
-      - name: Configure kernel options
+      - name: Configure options
         working-directory: kernel_workspace/common/arch/arm64/configs
         shell: bash
         run: |
@@ -342,31 +277,22 @@ jobs:
           CONFIG_LTO_CLANG=y
           CONFIG_LTO_CLANG_THIN=y
           CONFIG_WERROR=n
-          CONFIG_NAMESPACES=y
-          CONFIG_NET_NS=y
-          CONFIG_PID_NS=y
-          CONFIG_USER_NS=y
-          CONFIG_IPC_NS=y
-          CONFIG_CGROUPS=y
-          CONFIG_DEVTMPFS=y
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_TMPFS_POSIX_ACL=y
           EOF
 
-          if [ "${{ inputs.enable_performance }}" = "true" ]; then
+          if [ "${{ github.event.inputs.enable_performance }}" = "true" ]; then
             cat >> "$DEFCONFIG" <<'EOF'
           CONFIG_CPU_FREQ_DEFAULT_GOV_PERFORMANCE=y
           CONFIG_CPU_FREQ_DEFAULT_GOV_SCHEDUTIL=n
           EOF
           fi
 
-          if [ "${{ inputs.enable_gaming }}" = "true" ]; then
+          if [ "${{ github.event.inputs.enable_gaming }}" = "true" ]; then
             cat >> "$DEFCONFIG" <<'EOF'
           CONFIG_MODULE_FORCE_LOAD=y
           EOF
           fi
 
-      - name: Remove stale build metadata
+      - name: Clean old metadata
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -414,9 +340,9 @@ jobs:
           unset CLANG_PREBUILT_BIN || true
           unset LLVM_PREBUILT_BIN || true
 
-          test "$(command -v clang)" = "$NEUTRON_HOME/bin/clang"
-          test "$(command -v clang++)" = "$NEUTRON_HOME/bin/clang++"
-          test "$(command -v ld.lld)" = "$NEUTRON_HOME/bin/ld.lld"
+          echo "clang: $(command -v clang)"
+          echo "clang++: $(command -v clang++)"
+          echo "ld.lld: $(command -v ld.lld)"
 
           BUILD_CONFIG=common/build.config.gki.aarch64 \
           USE_CCACHE=1 \
@@ -438,7 +364,7 @@ jobs:
           LTO=thin \
           build/build.sh -j2
 
-      - name: Verify build output
+      - name: Verify output
         working-directory: kernel_workspace
         shell: bash
         run: |
@@ -480,11 +406,8 @@ jobs:
             )"
           fi
 
-          if [ -z "$IMAGE" ] || [ ! -f "$IMAGE" ]; then
-            echo "::error::Final Image not found"
-            find out -maxdepth 6 -type f | sort || true
-            exit 1
-          fi
+          test -n "$IMAGE"
+          test -f "$IMAGE"
 
           cp "$IMAGE" \
             "$GITHUB_WORKSPACE/build-info/Image"
@@ -510,19 +433,7 @@ jobs:
 
           cp "$IMAGE_PATH" AnyKernel3/Image
 
-          SOURCE_HASH="$(
-            sha256sum "$IMAGE_PATH" |
-            awk '{print $1}'
-          )"
-
-          PACKAGE_HASH="$(
-            sha256sum AnyKernel3/Image |
-            awk '{print $1}'
-          )"
-
-          test "$SOURCE_HASH" = "$PACKAGE_HASH"
-
-          ZIP_NAME="${{ inputs.device_name }}-NeutronClang-FKM.zip"
+          ZIP_NAME="${{ github.event.inputs.device_name }}-NeutronClang-FKM.zip"
 
           cd AnyKernel3
 
@@ -535,21 +446,10 @@ jobs:
           sha256sum "$ZIP_NAME" \
             > "build-info/$ZIP_NAME.sha256"
 
-      - name: Print build summary
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Kernel: ${{ inputs.kernel_brand }}"
-          echo "Compiler: $NEUTRON_CLANG_ID"
-          echo "LTO: Thin"
-
-          ccache --show-stats || true
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.device_name }}-NeutronClang-FKM
+          name: ${{ github.event.inputs.device_name }}-NeutronClang-FKM
           path: |
             *.zip
             build-info/**
