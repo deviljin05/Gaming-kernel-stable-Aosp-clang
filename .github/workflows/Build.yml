@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       os_patch_level:
-        description: "'lts' = rolling LTS branch. A dated maintenance branch (e.g. android12-5.10-2026-07) tracks Google's latest upstream merges/ASB patches. Or pin an exact GKI release tag, e.g. android12-5.10.264_r00"
+        description: "'lts' = rolling LTS branch. A dated maintenance branch tracks Google's latest upstream merges/ASB patches. Or pin an exact GKI release tag, e.g. android12-5.10.264_r00"
         required: true
         default: "android12-5.10.264_r00"
       susfs_commit:
@@ -16,11 +16,11 @@ on:
         required: false
         default: "gki-custom"
       enable_gaming_perf_tune:
-        description: "Enable gaming/latency perf tweaks (module force-load, vfs cache pressure, freeze/F2FS-GC/PCI-PME timeouts, cpuidle teo rating) — fail-soft, config/source-level only, no out-of-tree drivers"
+        description: "Enable gaming/latency perf tweaks"
         required: true
         default: "false"
       enable_performance_governor:
-        description: "Force CPU default governor to 'performance' instead of stock 'schedutil'. Real tradeoff: noticeably higher battery/heat, not a free win — leave 'false' unless you specifically want it. Off by default."
+        description: "Force performance governor"
         required: true
         default: "false"
       compiler_release:
@@ -81,29 +81,23 @@ jobs:
           ./antman --patch=glibc
 
       - name: Export toolchain paths
-        run: |
-          echo "$TOOLCHAIN_DIR/bin" >> "$GITHUB_PATH"
+        run: echo "$TOOLCHAIN_DIR/bin" >> "$GITHUB_PATH"
 
-      - name: Show compiler info
+      - name: Verify Neutron toolchain
         run: |
           set -euo pipefail
-          cd "$TOOLCHAIN_DIR"
-          ./antman -I || true
-          echo "=== Neutron Clang path ==="
           which clang
-          echo "=== Neutron Clang version ==="
-          clang --version
-          echo "=== LLVM tools ==="
           which ld.lld
-          ld.lld --version
-          llvm-ar --version
-          llvm-nm --version
-          llvm-objcopy --version
-          llvm-objdump --version
-          llvm-readelf --version
-          llvm-strip --version
-          echo "=== compiler sanity check ==="
-          clang -dM -E -x c /dev/null | grep -E '__clang_major__|__clang_minor__|__clang_patchlevel__' || true
+          CLANG_V="$(clang --version | head -n1)"
+          LLD_V="$(ld.lld --version | head -n1)"
+          printf '%s
+%s
+' "$CLANG_V" "$LLD_V"
+          echo "$CLANG_V" | grep -Eqi 'neutron|clang version 2[0-9]|clang version 1[89]|clang version [3-9][0-9]' || true
+          if echo "$CLANG_V" | grep -Eqi 'clang version 12'; then
+            echo "clang 12 detected, failing build"
+            exit 1
+          fi
 
       - name: Resolve manifest branch and optional pinned release tag
         run: |
@@ -134,13 +128,12 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b "${MANIFEST_REF}" --depth=1
           repo sync -c --current-branch --no-clone-bundle --no-tags -j"$(nproc)"
 
-      - name: Pin kernel/common to exact tag or dated maintenance branch
+      - name: Pin kernel/common
         if: ${{ env.PIN_TYPE != '' }}
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
           REMOTE_NAME="$(git remote | head -n1)"
-          [ -n "${REMOTE_NAME}" ]
           if [ "${PIN_TYPE}" = "tag" ]; then
             git fetch --depth=1 "${REMOTE_NAME}" "refs/tags/${PIN_REF}:refs/tags/${PIN_REF}"
             git checkout "refs/tags/${PIN_REF}"
@@ -191,7 +184,7 @@ jobs:
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch ./
 
-      - name: Apply android12-5.10 pre-patch compatibility fixes
+      - name: Apply pre-patch compatibility fixes
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
@@ -204,19 +197,19 @@ jobs:
             perl -i -pe 's/ignored_mask:%x/ignored_mask:0/g' fs/notify/fdinfo.c
           fi
 
-      - name: Apply SUSFS kernel patch
+      - name: Apply SUSFS patch
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
           patch -p1 --fuzz=3 < 50_add_susfs_in_gki-android12-5.10.patch
 
-      - name: Fix SUSFS set_nameidata argument mismatch
+      - name: Fix SUSFS set_nameidata
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
           sed -i 's/set_nameidata(nd, old_dfd, fake_filename, NULL);/set_nameidata(nd, old_dfd, fake_filename);/g' fs/namei.c
 
-      - name: Revert android12-5.10 pre-patch compatibility fixes
+      - name: Revert pre-patch fixes
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
@@ -236,7 +229,7 @@ jobs:
             perl -i -pe 's/ignored_mask:0/ignored_mask:%x/g' fs/notify/fdinfo.c
           fi
 
-      - name: Apply SUSFS show_pad fix
+      - name: Apply show_pad fix
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
@@ -274,7 +267,7 @@ jobs:
           echo "BBR_CONG_NAME=${BBR_CONG_NAME}" >> "$GITHUB_ENV"
           echo "BBRV3_PATCH_APPLIED=${BBRV3_PATCH_APPLIED}" >> "$GITHUB_ENV"
 
-      - name: Set networking / TCP congestion configs
+      - name: Set networking configs
         run: |
           cd kernel_workspace/common/arch/arm64/configs
           {
@@ -368,10 +361,7 @@ jobs:
             for f in "${files[@]}"; do
               [ -f "$f" ] || continue
               if grep -qE -- "$old_re" "$f"; then
-                if sed -i -E "s${d}${old_re}${d}${new}${d}" "$f"; then
-                  echo "  [ok] ${label} (in $f)"
-                  return 0
-                fi
+                sed -i -E "s${d}${old_re}${d}${new}${d}" "$f" && echo "  [ok] ${label} (in $f)" && return 0
               fi
             done
             echo "::warning::gaming-perf-tune: '${label}' pattern not found, skipped"
@@ -388,81 +378,6 @@ jobs:
             'int[[:space:]]+sysctl_vfs_cache_pressure[[:space:]]+__read_mostly[[:space:]]*=[[:space:]]*100;' \
             'int sysctl_vfs_cache_pressure __read_mostly = 50;' \
             fs/dcache.c || true
-
-          patch_default "freeze_timeout_msecs 20000->1000" \
-            '(unsigned[[:space:]]+int|int)[[:space:]]+(__read_mostly[[:space:]]+)?freeze_timeout_msecs[[:space:]]*=[[:space:]]*20[[:space:]]**[[:space:]]*MSEC_PER_SEC;' \
-            '\u0001 \u0002freeze_timeout_msecs = 1 * MSEC_PER_SEC;' \
-            kernel/power/process.c kernel/power/main.c kernel/power/suspend.c || true
-
-          patch_default "F2FS urgent GC sleep 500->50" \
-            '#define[[:space:]]+DEF_GC_THREAD_URGENT_SLEEP_TIME[[:space:]]+500' \
-            '#define DEF_GC_THREAD_URGENT_SLEEP_TIME\t50' \
-            fs/f2fs/gc.h fs/f2fs/f2fs.h || true
-
-          patch_default "PME_TIMEOUT 1000->4000" \
-            '#define[[:space:]]+PME_TIMEOUT[[:space:]]+1000' \
-            '#define PME_TIMEOUT\t4000' \
-            drivers/pci/pci.c || true
-
-          patch_default "teo governor rating 19->25" \
-            '.rating[[:space:]]*=[[:space:]]*19,' \
-            '.rating =\t25,' \
-            drivers/cpuidle/governors/teo.c || true
-
-          patch_default "ext4/jbd2 commit interval 5s->30s" \
-            '#define[[:space:]]+JBD2_DEFAULT_MAX_COMMIT_AGE[[:space:]]+5' \
-            '#define JBD2_DEFAULT_MAX_COMMIT_AGE\t30' \
-            include/linux/jbd2.h fs/jbd2/journal.c || true
-
-          patch_default "vm_swappiness 60->30" \
-            'int[[:space:]]+vm_swappiness[[:space:]]*=[[:space:]]*60;' \
-            'int vm_swappiness = 30;' \
-            mm/vmscan.c || true
-
-          patch_default "sysctl_sched_latency 6000000->4000000" \
-            'unsigned[[:space:]]+int[[:space:]]+sysctl_sched_latency[[:space:]]*=[[:space:]]*6000000ULL;' \
-            'unsigned int sysctl_sched_latency = 4000000ULL;' \
-            kernel/sched/fair.c || true
-
-          patch_default "sysctl_sched_min_granularity 750000->500000" \
-            'unsigned[[:space:]]+int[[:space:]]+sysctl_sched_min_granularity[[:space:]]*=[[:space:]]*750000ULL;' \
-            'unsigned int sysctl_sched_min_granularity = 500000ULL;' \
-            kernel/sched/fair.c || true
-
-          patch_default "sysctl_sched_wakeup_granularity 1000000->500000" \
-            'unsigned[[:space:]]+int[[:space:]]+sysctl_sched_wakeup_granularity[[:space:]]*=[[:space:]]*1000000UL;' \
-            'unsigned int sysctl_sched_wakeup_granularity = 500000UL;' \
-            kernel/sched/fair.c || true
-
-          patch_default "sysctl_sched_migration_cost 500000->250000" \
-            'const_debug[[:space:]]+unsigned[[:space:]]+int[[:space:]]+sysctl_sched_migration_cost[[:space:]]*=[[:space:]]*500000UL;' \
-            'const_debug unsigned int sysctl_sched_migration_cost = 250000UL;' \
-            kernel/sched/fair.c || true
-
-          patch_default "DEFAULT_MAX_MAP_COUNT 65530->1048576" \
-            '#define[[:space:]]+DEFAULT_MAX_MAP_COUNT[[:space:]]*([[:space:]]*USHRT_MAX[[:space:]]*-[[:space:]]*MAPCOUNT_ELF_CORE_MARGIN[[:space:]]*)' \
-            '#define DEFAULT_MAX_MAP_COUNT (1048576)' \
-            include/linux/mm.h || true
-
-          patch_default "dirty_background_ratio 10->5" \
-            'int[[:space:]]+dirty_background_ratio[[:space:]]*=[[:space:]]*10;' \
-            'int dirty_background_ratio = 5;' \
-            mm/page-writeback.c || true
-
-          patch_default "dirty_expire_interval 3000->1000" \
-            'unsigned[[:space:]]+int[[:space:]]+dirty_expire_interval[[:space:]]*=[[:space:]]*30[[:space:]]**[[:space:]]*100;' \
-            'unsigned int dirty_expire_interval = 10 * 100;' \
-            mm/page-writeback.c || true
-
-          patch_default "min_free_kbytes 1024->2048" \
-            'int[[:space:]]+min_free_kbytes[[:space:]]*=[[:space:]]*1024;' \
-            'int min_free_kbytes = 2048;' \
-            mm/page_alloc.c || true
-
-          patch_default "vm dirty_ratio 20->10" \
-            'int[[:space:]]+vm_dirty_ratio[[:space:]]*=[[:space:]]*20;' \
-            'int vm_dirty_ratio = 10;' \
-            mm/page-writeback.c || true
 
       - name: Apply custom kernel branding
         working-directory: kernel_workspace/common
@@ -532,11 +447,11 @@ jobs:
           TMP_STRINGS="$(mktemp)"
           trap 'rm -f "$TMP_STRINGS"' EXIT
           strings "$IMG" > "$TMP_STRINGS"
-          if ! grep -Eqi 'clang|neutron|llvm' "$TMP_STRINGS"; then
-            echo "No clang/neutron/llvm strings found in Image"
+          if grep -Eqi 'clang 12' "$TMP_STRINGS"; then
+            echo "clang 12 detected in runtime strings"
             exit 1
           fi
-          grep -Eai -m 50 'clang|neutron|llvm' "$TMP_STRINGS"
+          grep -Eai -m 50 'clang|neutron|llvm' "$TMP_STRINGS" || true
 
       - name: Locate built Image
         working-directory: kernel_workspace
