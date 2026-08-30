@@ -519,7 +519,6 @@ jobs:
           [ -n "$CFG" ]
           grep -q '^CONFIG_CC_IS_CLANG=y$' "$CFG"
           grep -q '^CONFIG_CLANG_VERSION=' "$CFG"
-          ! grep -q 'gcc' "$CFG" || true
 
       - name: Verify final runtime identity strings
         working-directory: kernel_workspace
@@ -530,7 +529,13 @@ jobs:
             IMG=$(find out -name "Image" | head -n1)
           fi
           [ -n "$IMG" ]
-          strings "$IMG" | grep -Ei 'clang|neutron|llvm' | head -n 50
+          TMP_STRINGS="$(mktemp)"
+          strings "$IMG" > "$TMP_STRINGS"
+          if ! grep -Eqi 'clang|neutron|llvm' "$TMP_STRINGS"; then
+            echo "No clang/neutron/llvm strings found in Image"
+            exit 1
+          fi
+          grep -Eai 'clang|neutron|llvm' "$TMP_STRINGS" | head -n 50
 
       - name: Locate built Image
         working-directory: kernel_workspace
