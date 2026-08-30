@@ -486,10 +486,9 @@ jobs:
           set -euo pipefail
           mkdir -p "$NEUTRON_DIR"
           cd "$NEUTRON_DIR"
-          curl -LO https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman
+          curl -fsSL -o antman https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman
           chmod +x antman
           ./antman -S=latest
-          echo "$NEUTRON_DIR/bin" >> "$GITHUB_PATH"
 
       - name: Confirm Neutron Clang toolchain
         run: |
@@ -504,26 +503,18 @@ jobs:
           llvm-objdump --version
           llvm-strip --version
 
-      - name: Point GKI build scripts at Neutron Clang
-        working-directory: kernel_workspace
+      - name: Build environment sanity
         run: |
           set -euo pipefail
-          grep -q '^CLANG_PREBUILT_BIN=' common/build.config.common
-          sed -i 's|^CLANG_PREBUILT_BIN=.*|CLANG_PREBUILT_BIN=/home/runner/toolchains/neutron-clang/bin/|' common/build.config.common
-          grep '^CLANG_PREBUILT_BIN=' common/build.config.common
-
-          grep -q '^export KBUILD_BUILD_HOST=build-host$' build/_setup_env.sh
-          grep -q '^export KBUILD_BUILD_USER=build-user$' build/_setup_env.sh
-          sed -i 's|^export KBUILD_BUILD_HOST=build-host$|export KBUILD_BUILD_HOST=ci|' build/_setup_env.sh
-          sed -i 's|^export KBUILD_BUILD_USER=build-user$|export KBUILD_BUILD_USER=builder|' build/_setup_env.sh
+          echo "PATH=$NEUTRON_DIR/bin:$PATH" >> "$GITHUB_ENV"
 
       - name: Build kernel
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
+          export PATH="$NEUTRON_DIR/bin:$PATH"
           export TRIM_NONLISTED_KMI=0
           export KMI_SYMBOL_LIST_STRICT_MODE=0
-          export PATH="$NEUTRON_DIR/bin:$PATH"
           LTO=thin CC=clang LLVM=1 LLVM_IAS=1 \
           AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip \
           BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" \
