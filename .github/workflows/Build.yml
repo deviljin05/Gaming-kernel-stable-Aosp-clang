@@ -332,8 +332,9 @@ jobs:
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          export PATH="$TOOLCHAIN_DIR/bin:$PATH"
-          export CLANG_PATH="$TOOLCHAIN_DIR/bin"
+          export TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
+          export CLANG_PATH="$TOOLCHAIN_BIN"
           export LLVM=1
           export CC=clang
           export HOSTCC=clang
@@ -351,7 +352,13 @@ jobs:
           export USE_CCACHE=1
           export CCACHE_DIR="$CCACHE_DIR"
           export LTO=thin
-          build/build.sh -j4 CC=clang LLVM=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip HOSTCC=clang HOSTCXX=clang++
+          echo "=== TOOLCHAIN ==="
+          which clang
+          clang --version | head -n1
+          which ld.lld
+          ld.lld --version | head -n1
+          grep -n 'CLANG_PREBUILT_BIN|CC=|LD=' common/build.config.common common/build.config.gki.aarch64 || true
+          build/build.sh -j4 CC="$TOOLCHAIN_BIN/clang" LLVM=1 LD="$TOOLCHAIN_BIN/ld.lld" AR="$TOOLCHAIN_BIN/llvm-ar" NM="$TOOLCHAIN_BIN/llvm-nm" OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy" OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump" READELF="$TOOLCHAIN_BIN/llvm-readelf" STRIP="$TOOLCHAIN_BIN/llvm-strip" HOSTCC="$TOOLCHAIN_BIN/clang" HOSTCXX="$TOOLCHAIN_BIN/clang++"
 
       - name: Kconfig
         working-directory: kernel_workspace
