@@ -58,7 +58,7 @@ jobs:
       - name: Ccache
         run: mkdir -p "$CCACHE_DIR"
 
-      - name: Neutron
+      - name: Neutron toolchain
         run: |
           set -euo pipefail
           mkdir -p "$TOOLCHAIN_DIR"
@@ -70,21 +70,20 @@ jobs:
           test -x "$TOOLCHAIN_DIR/bin/clang"
           test -x "$TOOLCHAIN_DIR/bin/ld.lld"
 
-      - name: Clang check
+      - name: Verify toolchain
         run: |
           set -euo pipefail
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
-          CLANG_LINE="$(clang --version | head -n1)"
-          LLD_LINE="$(ld.lld --version | head -n1)"
-          echo "$CLANG_LINE"
-          echo "$LLD_LINE"
-          echo "$CLANG_LINE" | grep -qi neutron
-          if echo "$CLANG_LINE" | grep -qi 'clang version 12'; then
-            echo "clang 12 detected"
+          echo "which clang: $(which clang)"
+          echo "which ld.lld: $(which ld.lld)"
+          clang --version | head -n1
+          ld.lld --version | head -n1
+          if clang --version | head -n1 | grep -qi 'clang version 12'; then
+            echo "Android clang 12 detected, aborting"
             exit 1
           fi
 
-      - name: Resolve
+      - name: Resolve manifest
         run: |
           set -euo pipefail
           INPUT="${{ github.event.inputs.os_patch_level }}"
@@ -102,7 +101,7 @@ jobs:
             echo "PIN_TYPE=branch" >> "$GITHUB_ENV"
           fi
 
-      - name: Sync
+      - name: Sync kernel
         run: |
           set -euo pipefail
           mkdir -p kernel_workspace
@@ -130,7 +129,7 @@ jobs:
           set -euo pipefail
           echo "SUBLEVEL=$(grep -m1 '^SUBLEVEL = ' common/Makefile | awk '{print $3}')" >> "$GITHUB_ENV"
 
-      - name: SUSFS
+      - name: SUSFS source
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
@@ -141,7 +140,7 @@ jobs:
           fi
           echo "SUSFS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Config SUSFS
+      - name: SUSFS config
         run: |
           cd kernel_workspace/common/arch/arm64/configs
           {
@@ -165,7 +164,7 @@ jobs:
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch ./
 
-      - name: Prep fix
+      - name: Prep fixes
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
@@ -177,6 +176,9 @@ jobs:
             perl -i -pe 's/\bmask,s*mark->ignored_mask/inotify_mark_user_mask(mark)/g' fs/notify/fdinfo.c
             perl -i -pe 's/ignored_mask:%x/ignored_mask:0/g' fs/notify/fdinfo.c
           fi
+          if [ "$SUBLEVEL" -le "209" ]; then
+            sed -i -e 's/goto show_pad;/return 0;/' fs/proc/task_mmu.c
+          fi
 
       - name: SUSFS patch
         working-directory: kernel_workspace/common
@@ -186,37 +188,11 @@ jobs:
         working-directory: kernel_workspace/common
         run: sed -i 's/set_nameidata(nd, old_dfd, fake_filename, NULL);/set_nameidata(nd, old_dfd, fake_filename);/g' fs/namei.c
 
-      - name: Post fix
-        working-directory: kernel_workspace/common
-        run: |
-          set -euo pipefail
-          if [ "$SUBLEVEL" -le "43" ]; then
-            sed -i 's/^size_t this_len = min_t(size_t, count, PAGE_SIZE);$/int this_len = min_t(int, count, PAGE_SIZE);/' fs/proc/base.c
-          fi
-          if [ "$SUBLEVEL" -le "117" ]; then
-            perl -i -pe 's#^(s+if (inode) {)#$1
-            \t\t/*
-            \t\t * IN_ALL_EVENTS represents all of the mask bits
-            \t\t * that we expose to userspace.
-            \t\t */
-            \t\tu32 mask = mark->mask & IN_ALL_EVENTS;#m' fs/notify/fdinfo.c
-            perl -i -pe 's/\binotify_mark_user_mask(mark)/mask, mark->ignored_mask/g' fs/notify/fdinfo.c
-            perl -i -pe 's/ignored_mask:0/ignored_mask:%x/g' fs/notify/fdinfo.c
-          fi
-
-      - name: Showpad
-        working-directory: kernel_workspace/common
-        run: |
-          set -euo pipefail
-          if [ "$SUBLEVEL" -le "209" ]; then
-            sed -i -e 's/goto show_pad;/return 0;/' fs/proc/task_mmu.c
-          fi
-
-      - name: KSU-Next
+      - name: KSU next
         working-directory: kernel_workspace/common
         run: curl -fsSL "https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh" | bash -s dev-susfs
 
-      - name: KSU patch
+      - name: KSU static patch
         working-directory: kernel_workspace/common/KernelSU-Next
         run: |
           set -euo pipefail
@@ -239,7 +215,7 @@ jobs:
           echo "BBR_CONG_NAME=${BBR_CONG_NAME}" >> "$GITHUB_ENV"
           echo "BBRV3_PATCH_APPLIED=${BBRV3_PATCH_APPLIED}" >> "$GITHUB_ENV"
 
-      - name: Net cfg
+      - name: Net config
         run: |
           cd kernel_workspace/common/arch/arm64/configs
           {
@@ -283,7 +259,7 @@ jobs:
           if ! patch -p1 < /tmp/droidspaces_posix_mqueue_kabi.patch; then DROIDSPACES_KABI_OK="false"; fi
           echo "DROIDSPACES_KABI_OK=${DROIDSPACES_KABI_OK}" >> "$GITHUB_ENV"
 
-      - name: Droid cfg
+      - name: Droid config
         run: |
           cd kernel_workspace/common/arch/arm64/configs
           if [ "${DROIDSPACES_KABI_OK}" = "true" ]; then
@@ -324,7 +300,7 @@ jobs:
           chmod +x scripts/setlocalversion
           echo 'CONFIG_LOCALVERSION="-NeutronClang"' >> arch/arm64/configs/gki_defconfig
 
-      - name: Disable checks
+      - name: Remove check_defconfig
         working-directory: kernel_workspace
         run: sed -i 's/check_defconfig//' ./common/build.config.gki
 
@@ -332,40 +308,36 @@ jobs:
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          export TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
+          TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
           export PATH="$TOOLCHAIN_BIN:$PATH"
           export CLANG_PATH="$TOOLCHAIN_BIN"
           export LLVM=1
-          export CC=clang
-          export HOSTCC=clang
-          export HOSTCXX=clang++
-          export LD=ld.lld
-          export AR=llvm-ar
-          export NM=llvm-nm
-          export OBJCOPY=llvm-objcopy
-          export OBJDUMP=llvm-objdump
-          export READELF=llvm-readelf
-          export STRIP=llvm-strip
-          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CC="$TOOLCHAIN_BIN/clang"
+          export HOSTCC="$TOOLCHAIN_BIN/clang"
+          export HOSTCXX="$TOOLCHAIN_BIN/clang++"
+          export LD="$TOOLCHAIN_BIN/ld.lld"
+          export AR="$TOOLCHAIN_BIN/llvm-ar"
+          export NM="$TOOLCHAIN_BIN/llvm-nm"
+          export OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy"
+          export OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump"
+          export READELF="$TOOLCHAIN_BIN/llvm-readelf"
+          export STRIP="$TOOLCHAIN_BIN/llvm-strip"
+          export OBJSIZE="$TOOLCHAIN_BIN/llvm-size"
           export CROSS_COMPILE=aarch64-linux-gnu-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
           export BUILD_CONFIG=common/build.config.gki.aarch64
           export USE_CCACHE=1
           export CCACHE_DIR="$CCACHE_DIR"
           export LTO=thin
-          echo "=== TOOLCHAIN ==="
-          which clang
+          echo "toolchain: $(which clang)"
           clang --version | head -n1
-          which ld.lld
-          ld.lld --version | head -n1
-          grep -n 'CLANG_PREBUILT_BIN|CC=|LD=' common/build.config.common common/build.config.gki.aarch64 || true
-          build/build.sh -j4 CC="$TOOLCHAIN_BIN/clang" LLVM=1 LD="$TOOLCHAIN_BIN/ld.lld" AR="$TOOLCHAIN_BIN/llvm-ar" NM="$TOOLCHAIN_BIN/llvm-nm" OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy" OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump" READELF="$TOOLCHAIN_BIN/llvm-readelf" STRIP="$TOOLCHAIN_BIN/llvm-strip" HOSTCC="$TOOLCHAIN_BIN/clang" HOSTCXX="$TOOLCHAIN_BIN/clang++"
+          build/build.sh -j4 LLVM=1 CC="$TOOLCHAIN_BIN/clang" LD="$TOOLCHAIN_BIN/ld.lld" AR="$TOOLCHAIN_BIN/llvm-ar" NM="$TOOLCHAIN_BIN/llvm-nm" OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy" OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump" READELF="$TOOLCHAIN_BIN/llvm-readelf" STRIP="$TOOLCHAIN_BIN/llvm-strip" HOSTCC="$TOOLCHAIN_BIN/clang" HOSTCXX="$TOOLCHAIN_BIN/clang++"
 
-      - name: Kconfig
+      - name: Verify config
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
           CFG="$(find out -name .config | head -n1)"
-          [ -n "$CFG" ]
           grep -q '^CONFIG_CC_IS_CLANG=y$' "$CFG"
           grep -q '^CONFIG_CLANG_VERSION=' "$CFG"
 
@@ -374,37 +346,27 @@ jobs:
         run: |
           set -euo pipefail
           HFILE="$(find out -path '*include/generated/compile.h' | head -n1)"
-          [ -n "$HFILE" ]
-          grep -E 'LINUX_COMPILER|LINUX_COMPILER_VERSION' "$HFILE" || true
+          grep -E 'LINUX_COMPILER|LINUX_COMPILER_VERSION' "$HFILE"
 
-      - name: Image verify
+      - name: Verify image
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
           IMG="$(find out -path '*dist/Image' | head -n1)"
-          [ -n "$IMG" ]
           TMP="$(mktemp)"
-          trap 'rm -f "$TMP"' EXIT
           strings "$IMG" > "$TMP"
           if grep -Eqi 'clang 12' "$TMP"; then
-            echo "clang 12 found"
+            echo "clang 12 still found"
             exit 1
           fi
           grep -Eai -m 50 'clang|neutron|llvm' "$TMP" || true
 
-      - name: Find Image
+      - name: Package
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          IMG="$(find out -path '*dist/Image' | head -n1)"
-          [ -n "$IMG" ]
-          echo "IMG_PATH=kernel_workspace/${IMG}" >> "$GITHUB_ENV"
-
-      - name: Package
-        run: |
-          set -euo pipefail
           git clone --depth=1 https://github.com/WildKernels/AnyKernel3.git -b gki-2.0 ak3
-          cp "${{ env.IMG_PATH }}" ak3/Image
+          cp "$(find out -path '*dist/Image' | head -n1)" ak3/Image
           cd ak3
           zip -r9 -q "../${{ github.event.inputs.device_name }}-Blaze-android12-5.10-susfs${SUSFS_COMMIT:0:8}.zip" . -x ".git*"
 
