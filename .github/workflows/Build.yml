@@ -43,7 +43,7 @@ jobs:
       - name: Deps
         run: |
           pacman -Syu --noconfirm --needed \
-            base-devel git curl bc bison flex openssl \
+            base-devel git curl wget bc bison flex openssl \
             python ncurses ccache zip unzip dtc patchelf file perl
 
       - name: Repo tool
