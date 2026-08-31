@@ -1,4 +1,4 @@
-name: Build Android 12 GKI Kernel
+name: Build Android 12 GKI Kernel - Neutron Clang - All Patches
 
 "on":
   workflow_dispatch:
@@ -16,36 +16,30 @@ name: Build Android 12 GKI Kernel
         type: string
 
       device_name:
-        description: "Artifact/device label"
+        description: "Artifact label"
         required: false
         default: "gki-custom"
         type: string
 
       compiler_release:
-        description: "Neutron Clang release or latest"
+        description: "Neutron Clang release, blank uses latest"
         required: false
-        default: "latest"
+        default: ""
         type: string
-
-      enable_extra_patches:
-        description: "Enable experimental BBRv3 and NTSync patches"
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
 
 env:
   VERSION: android12-5.10
-  TOOLCHAIN_DIR: ${{ github.workspace }}/toolchains/neutron-clang
+  TOOLCHAIN_ROOT: ${{ github.workspace }}/toolchains/neutron-clang
   CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
   build:
-    name: Build GKI Kernel
+    name: Build GKI with All Experimental Patches
     runs-on: ubuntu-22.04
-    timeout-minutes: 240
+    timeout-minutes: 300
 
     defaults:
       run:
@@ -75,9 +69,10 @@ jobs:
             bc \
             bison \
             build-essential \
-            clang \
             ccache \
+            clang \
             curl \
+            device-tree-compiler \
             flex \
             gcc-aarch64-linux-gnu \
             git \
@@ -87,6 +82,7 @@ jobs:
             lld \
             llvm \
             pahole \
+            patchelf \
             perl \
             python3 \
             rsync \
@@ -99,9 +95,8 @@ jobs:
           command -v git
           command -v curl
           command -v python3
-          command -v clang
-          command -v ld.lld
-          command -v aarch64-linux-gnu-gcc
+          command -v make
+          command -v patch
 
       - name: Configure Git
         run: |
@@ -120,7 +115,9 @@ jobs:
             https://storage.googleapis.com/git-repo-downloads/repo \
             -o "$HOME/bin/repo"
 
+          test -s "$HOME/bin/repo"
           chmod +x "$HOME/bin/repo"
+
           echo "$HOME/bin" >> "$GITHUB_PATH"
 
           "$HOME/bin/repo" --version
@@ -132,17 +129,15 @@ jobs:
           mkdir -p "$CCACHE_DIR"
 
           ccache --set-config=cache_dir="$CCACHE_DIR"
-          ccache --set-config=max_size=5G
+          ccache --set-config=max_size=8G
           ccache --zero-stats
 
-      - name: Install Neutron Clang
+      - name: Download Neutron Clang
         run: |
           set -euo pipefail
 
-          TOOLCHAIN_DIR="$GITHUB_WORKSPACE/toolchains/neutron-clang"
-
-          mkdir -p "$TOOLCHAIN_DIR"
-          cd "$TOOLCHAIN_DIR"
+          mkdir -p "$TOOLCHAIN_ROOT"
+          cd "$TOOLCHAIN_ROOT"
 
           curl -fL --retry 5 --retry-delay 5 \
             https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman \
@@ -153,55 +148,78 @@ jobs:
 
           RELEASE="${{ inputs.compiler_release }}"
 
-          if [ -z "$RELEASE" ] || [ "$RELEASE" = "latest" ]; then
-            ./antman -S latest
+          if [ -n "$RELEASE" ]; then
+            ./antman -S="$RELEASE"
           else
-            ./antman -S "$RELEASE"
+            ./antman -S
           fi
 
-          echo "Searching for installed Neutron Clang binaries..."
+          echo "AntMan information:"
+          ./antman -I || true
 
-          CLANG_PATH="$(find "$TOOLCHAIN_DIR" -type f -name clang -perm -111 | head -n1 || true)"
-          CLANGXX_PATH="$(find "$TOOLCHAIN_DIR" -type f -name clang++ -perm -111 | head -n1 || true)"
-          LLD_PATH="$(find "$TOOLCHAIN_DIR" -type f -name ld.lld -perm -111 | head -n1 || true)"
+          echo "Searching Neutron binaries..."
+
+          CLANG_PATH="$(
+            find "$TOOLCHAIN_ROOT" \
+              -type f \
+              -name clang \
+              -perm -111 \
+              | head -n1 || true
+          )"
+
+          CLANGXX_PATH="$(
+            find "$TOOLCHAIN_ROOT" \
+              -type f \
+              -name clang++ \
+              -perm -111 \
+              | head -n1 || true
+          )"
+
+          LLD_PATH="$(
+            find "$TOOLCHAIN_ROOT" \
+              -type f \
+              -name ld.lld \
+              -perm -111 \
+              | head -n1 || true
+          )"
 
           if [ -z "$CLANG_PATH" ] || [ -z "$CLANGXX_PATH" ] || [ -z "$LLD_PATH" ]; then
             echo "ERROR: Neutron Clang binaries were not found."
             echo "Toolchain contents:"
-            find "$TOOLCHAIN_DIR" -maxdepth 6 -type f | sort | head -n 300
+            find "$TOOLCHAIN_ROOT" -maxdepth 7 -type f | sort | head -n 400
             exit 1
           fi
 
           TOOLCHAIN_BIN="$(dirname "$CLANG_PATH")"
 
-          echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> "$GITHUB_ENV"
           echo "TOOLCHAIN_BIN=$TOOLCHAIN_BIN" >> "$GITHUB_ENV"
           echo "$TOOLCHAIN_BIN" >> "$GITHUB_PATH"
 
-          echo "Neutron Clang directory: $TOOLCHAIN_BIN"
-          echo "clang: $CLANG_PATH"
-          echo "clang++: $CLANGXX_PATH"
-          echo "ld.lld: $LLD_PATH"
+          echo "Neutron binary directory: $TOOLCHAIN_BIN"
 
       - name: Verify Neutron Clang
         run: |
           set -euo pipefail
 
           test -n "${TOOLCHAIN_BIN:-}"
+
           test -x "$TOOLCHAIN_BIN/clang"
           test -x "$TOOLCHAIN_BIN/clang++"
           test -x "$TOOLCHAIN_BIN/ld.lld"
+          test -x "$TOOLCHAIN_BIN/llvm-ar"
+          test -x "$TOOLCHAIN_BIN/llvm-nm"
+          test -x "$TOOLCHAIN_BIN/llvm-objcopy"
+          test -x "$TOOLCHAIN_BIN/llvm-objdump"
+          test -x "$TOOLCHAIN_BIN/llvm-readelf"
+          test -x "$TOOLCHAIN_BIN/llvm-strip"
 
           "$TOOLCHAIN_BIN/clang" --version
           "$TOOLCHAIN_BIN/clang++" --version
           "$TOOLCHAIN_BIN/ld.lld" --version
 
           cat > "$RUNNER_TEMP/neutron-test.c" <<'EOF'
-          #include <stdio.h>
-
           int main(void)
           {
-              puts("neutron-clang-test-ok");
               return 0;
           }
           EOF
@@ -218,7 +236,7 @@ jobs:
 
           echo "Neutron Clang verification successful."
 
-      - name: Resolve manifest
+      - name: Resolve kernel manifest
         run: |
           set -euo pipefail
 
@@ -240,9 +258,11 @@ jobs:
             echo "PIN_REF=$INPUT" >> "$GITHUB_ENV"
           fi
 
-          echo "Manifest: $MANIFEST_REF"
+          echo "MANIFEST_REF=$MANIFEST_REF"
+          echo "PIN_TYPE=$PIN_TYPE"
+          echo "PIN_REF=$PIN_REF"
 
-      - name: Initialize kernel manifest
+      - name: Initialize Android kernel manifest
         run: |
           set -euo pipefail
 
@@ -254,7 +274,7 @@ jobs:
             -b "$MANIFEST_REF" \
             --depth=1
 
-      - name: Sync kernel sources
+      - name: Sync Android kernel source
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
@@ -319,47 +339,27 @@ jobs:
             https://gitlab.com/simonpunk/susfs4ksu.git \
             susfs4ksu
 
-          cd susfs4ksu
+          if [ -n "${{ inputs.susfs_commit }}" ]; then
+            cd susfs4ksu
 
-          SUSFS_INPUT="${{ inputs.susfs_commit }}"
+            git fetch \
+              --depth=1 \
+              origin \
+              "${{ inputs.susfs_commit }}"
 
-          if [ -n "$SUSFS_INPUT" ]; then
-            git fetch --depth=1 origin "$SUSFS_INPUT"
-            git checkout "$SUSFS_INPUT"
+            git checkout "${{ inputs.susfs_commit }}"
           fi
 
-          echo "SUSFS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-
-      - name: Configure SUSFS
-        working-directory: kernel_workspace/common
-        run: |
-          set -euo pipefail
-
-          CONFIG="arch/arm64/configs/gki_defconfig"
-
-          test -f "$CONFIG"
-
-          cat >> "$CONFIG" <<'EOF'
-          CONFIG_KSU=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KSU_SUSFS_SUS_MAP=y
-          EOF
+          echo "SUSFS_COMMIT=$(git -C susfs4ksu rev-parse HEAD)" \
+            >> "$GITHUB_ENV"
 
       - name: Copy SUSFS files
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
 
-          cp ../susfs4ksu/kernel_patches/fs/* ./fs/
-          cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
+          cp ../susfs4ksu/kernel_patches/fs/* fs/
+          cp ../susfs4ksu/kernel_patches/include/linux/* include/linux/
 
           cp \
             ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch \
@@ -379,15 +379,6 @@ jobs:
           else
             echo "SUSFS patch already applied or not cleanly applicable."
           fi
-
-      - name: Fix SUSFS nameidata
-        working-directory: kernel_workspace/common
-        run: |
-          set -euo pipefail
-
-          sed -i \
-            's/set_nameidata(nd, old_dfd, fake_filename, NULL);/set_nameidata(nd, old_dfd, fake_filename);/g' \
-            fs/namei.c || true
 
       - name: Install KernelSU Next
         working-directory: kernel_workspace/common
@@ -415,39 +406,43 @@ jobs:
             echo "KernelSU static patch already applied or skipped."
           fi
 
-      - name: Configure kernel features
+      - name: SUSFS compatibility fixes
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
 
-          CONFIG="arch/arm64/configs/gki_defconfig"
+          if [ "$SUBLEVEL" -le 43 ]; then
+            sed -i \
+              's/int[[:space:]]+this_len[[:space:]]*=[[:space:]]*min_t(size_t,/size_t this_len = min_t(size_t,/' \
+              fs/proc/base.c || true
+          fi
 
-          cat >> "$CONFIG" <<'EOF'
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_TCP_CONG_CUBIC=y
-          CONFIG_TCP_CONG_BIC=y
-          CONFIG_TCP_CONG_WESTWOOD=y
-          CONFIG_TCP_CONG_HTCP=y
-          CONFIG_DEFAULT_TCP_CONG=bbr
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_NET_SCH_FQ_CODEL=y
-          CONFIG_NAMESPACES=y
-          CONFIG_NET_NS=y
-          CONFIG_CGROUPS=y
-          CONFIG_PID_NS=y
-          CONFIG_USER_NS=y
-          CONFIG_DEVTMPFS=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_TMPFS_XATTR=y
-          CONFIG_NTSYNC=y
-          EOF
+          if [ "$SUBLEVEL" -le 117 ]; then
+            sed -i \
+              's/mask,[[:space:]]*mark->ignored_mask/inotify_mark_user_mask(mark)/g' \
+              fs/notify/fdinfo.c || true
 
-      - name: Apply optional extra patches
-        if: ${{ inputs.enable_extra_patches == true }}
+            sed -i \
+              's/ignored_mask:%x/ignored_mask:0/g' \
+              fs/notify/fdinfo.c || true
+          fi
+
+          if [ "$SUBLEVEL" -le 209 ]; then
+            sed -i \
+              's/goto show_pad;/return 0;/g' \
+              fs/proc/task_mmu.c || true
+          fi
+
+          sed -i \
+            's/set_nameidata(nd, old_dfd, fake_filename, NULL);/set_nameidata(nd, old_dfd, fake_filename);/g' \
+            fs/namei.c || true
+
+      - name: Apply BBRv3
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
+
+          rm -rf /tmp/wildpatches
 
           git clone \
             --depth=1 \
@@ -455,120 +450,124 @@ jobs:
             /tmp/wildpatches
 
           BBR_PATCH="/tmp/wildpatches/common/bbrv3/0001-net-tcp-backport-BBRv3-to-android12-5.10.patch"
+          BBR_NAME="bbr"
+          BBR_APPLIED="false"
 
-          if [ -f "$BBR_PATCH" ] && git apply --check "$BBR_PATCH" 2>/dev/null; then
-            git apply "$BBR_PATCH"
-            echo "CONFIG_TCP_CONG_BBR3=y" \
-              >> arch/arm64/configs/gki_defconfig
+          if [ -f "$BBR_PATCH" ]; then
+            if git apply --check "$BBR_PATCH" 2>/dev/null; then
+              git apply "$BBR_PATCH"
+              BBR_APPLIED="true"
+            else
+              echo "BBRv3 patch already applied or incompatible."
+            fi
+          else
+            echo "BBRv3 patch was not found."
           fi
 
-          curl -fsSL \
-            -o /tmp/ntsync.patch \
-            https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_compat_android12-5.10.patch
+          if [ "$BBR_APPLIED" = "true" ]; then
+            DETECTED="$(
+              grep -rhoE 'name[[:space:]]*=[[:space:]]*"[^"]+"' \
+                net/ipv4/tcp_bbr*.c 2>/dev/null \
+                | grep -oE '"[^"]+"' \
+                | tr -d '"' \
+                | head -n1 || true
+            )"
 
-          if git apply --check /tmp/ntsync.patch 2>/dev/null; then
-            git apply /tmp/ntsync.patch
+            if [ -n "$DETECTED" ]; then
+              BBR_NAME="$DETECTED"
+            fi
           fi
 
-      - name: Set kernel brand
+          echo "BBR_NAME=$BBR_NAME" >> "$GITHUB_ENV"
+          echo "BBR_APPLIED=$BBR_APPLIED" >> "$GITHUB_ENV"
+
+      - name: Configure BBRv3 and networking
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
 
-          if [ -f scripts/setlocalversion ]; then
-            cp scripts/setlocalversion scripts/setlocalversion.original
-          fi
+          CONFIG="arch/arm64/configs/gki_defconfig"
 
-          cat > scripts/setlocalversion <<'EOF'
-          #!/bin/sh
-          printf -- '-BLAZE-KSUNv1-NeutronClang'
+          cat >> "$CONFIG" <<EOF
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_TCP_CONG_CUBIC=y
+          CONFIG_TCP_CONG_BIC=y
+          CONFIG_TCP_CONG_WESTWOOD=y
+          CONFIG_TCP_CONG_HTCP=y
+          CONFIG_DEFAULT_TCP_CONG=$BBR_NAME
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_NET_SCH_CAKE=y
           EOF
 
-          chmod +x scripts/setlocalversion
+          if [ "$BBR_APPLIED" = "true" ]; then
+            echo "CONFIG_TCP_CONG_BBR3=y" >> "$CONFIG"
+          fi
 
-          echo 'CONFIG_LOCALVERSION="-NeutronClang"' \
-            >> arch/arm64/configs/gki_defconfig
-
-      - name: Disable check_defconfig
-        working-directory: kernel_workspace
+      - name: Apply NTSync
+        working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
 
-          test -f common/build.config.gki
-          sed -i 's/check_defconfig//g' common/build.config.gki
+          if [ "$SUBLEVEL" -le 208 ]; then
+            curl -fsSL \
+              -o /tmp/ntsync-lockdep.patch \
+              https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/main/.github/actions/ntsync/patches/0003-lockdep-assert-none-held.patch
 
-      - name: Build kernel with Neutron Clang
-        working-directory: kernel_workspace
+            if git apply --check /tmp/ntsync-lockdep.patch 2>/dev/null; then
+              git apply /tmp/ntsync-lockdep.patch
+            else
+              echo "NTSync lockdep patch already applied or skipped."
+            fi
+          fi
+
+          curl -fsSL \
+            -o /tmp/ntsync-compat.patch \
+            https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_compat_android12-5.10.patch
+
+          if git apply --check /tmp/ntsync-compat.patch 2>/dev/null; then
+            git apply /tmp/ntsync-compat.patch
+          else
+            echo "NTSync compatibility patch already applied or skipped."
+          fi
+
+          curl -fsSL \
+            -o /tmp/ntsync-base.patch \
+            https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_base.patch
+
+          if git apply --check /tmp/ntsync-base.patch 2>/dev/null; then
+            git apply /tmp/ntsync-base.patch
+          else
+            echo "NTSync base patch already applied or skipped."
+          fi
+
+      - name: Configure NTSync
+        working-directory: kernel_workspace/common
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          test -n "${TOOLCHAIN_BIN:-}"
-          test -x "$TOOLCHAIN_BIN/clang"
-          test -x "$TOOLCHAIN_BIN/clang++"
-          test -x "$TOOLCHAIN_BIN/ld.lld"
+          echo "CONFIG_NTSYNC=y" \
+            >> arch/arm64/configs/gki_defconfig
 
-          export PATH="$TOOLCHAIN_BIN:$PATH"
+      - name: Apply Droidspaces patches
+        working-directory: kernel_workspace/common
+        run: |
+          set -euo pipefail
 
-          export LLVM=1
-          export LLVM_IAS=1
+          DROIDSPACES_OK="true"
 
-          export CC="$TOOLCHAIN_BIN/clang"
-          export CXX="$TOOLCHAIN_BIN/clang++"
-          export LD="$TOOLCHAIN_BIN/ld.lld"
-          export AR="$TOOLCHAIN_BIN/llvm-ar"
-          export NM="$TOOLCHAIN_BIN/llvm-nm"
-          export OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy"
-          export OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump"
-          export READELF="$TOOLCHAIN_BIN/llvm-readelf"
-          export STRIP="$TOOLCHAIN_BIN/llvm-strip"
+          curl -fsSL \
+            -o /tmp/droidspaces-sysvipc.patch \
+            https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
 
-          export HOSTCC="$TOOLCHAIN_BIN/clang"
-          export HOSTCXX="$TOOLCHAIN_BIN/clang++"
-          export HOSTLD="$TOOLCHAIN_BIN/ld.lld"
-          export HOSTAR="$TOOLCHAIN_BIN/llvm-ar"
-          export HOSTNM="$TOOLCHAIN_BIN/llvm-nm"
+          if git apply --check /tmp/droidspaces-sysvipc.patch 2>/dev/null; then
+            git apply /tmp/droidspaces-sysvipc.patch
+          else
+            echo "Droidspaces SYSVIPC patch already applied or incompatible."
+            DROIDSPACES_OK="false"
+          fi
 
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          export LTO=thin
-          export USE_CCACHE=1
-          export CCACHE_DIR="$CCACHE_DIR"
-
-          rm -rf out
-          mkdir -p out
-
-          "$CC" --version | head -n3
-          "$HOSTCC" --version | head -n3
-          "$LD" --version | head -n2
-
-          make -C common \
-            O="$PWD/out" \
-            ARCH=arm64 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            HOSTCC="$HOSTCC" \
-            HOSTCXX="$HOSTCXX" \
-            HOSTLD="$HOSTLD" \
-            HOSTAR="$HOSTAR" \
-            HOSTNM="$HOSTNM" \
-            HOSTCFLAGS="-O2 -fno-lto -fno-pie -no-pie" \
-            scripts/basic/fixdep
-
-          test -x out/scripts/basic/fixdep
-
-          BUILD_CONFIG=common/build.config.gki.aarch64 \
-          LTO=thin \
-          USE_CCACHE=1 \
-          CCACHE_DIR="$CCACHE_DIR" \
-          build/build.sh \
-            -j2 \
-            V=1 \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            ARCH=arm64 \
-            CC="$CC" \
-            CXX="$CXX" \
-            LD="$LD" \
-            AR="$AR" \
-            NM="$NM" \
-            O
+          curl -fsSL \
+            -o /tmp/droidspaces-mqueue.patch \
+      
