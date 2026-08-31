@@ -1,6 +1,6 @@
 name: Build Android 12 GKI - Neutron Clang - All Patches
 
-"on":
+on:
   workflow_dispatch:
     inputs:
       os_patch_level:
@@ -89,7 +89,6 @@ jobs:
       - name: Configure Git
         run: |
           set -euo pipefail
-
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
@@ -107,15 +106,12 @@ jobs:
           chmod +x "$HOME/bin/repo"
 
           echo "$HOME/bin" >> "$GITHUB_PATH"
-
           "$HOME/bin/repo" --version
 
       - name: Prepare ccache
         run: |
           set -euo pipefail
-
           mkdir -p "$CCACHE_DIR"
-
           ccache --set-config=cache_dir="$CCACHE_DIR"
           ccache --set-config=max_size=8G
           ccache --zero-stats
@@ -143,11 +139,8 @@ jobs:
             ./antman -S="$RELEASE"
           fi
 
-          echo "Neutron directory:"
-          find "$NEUTRON_HOME" -maxdepth 3 -type f | sort | head -n 200
-
-          if ! test -x "$NEUTRON_HOME/bin/clang"; then
-            echo "clang is not executable; applying glibc compatibility patch"
+          if ! "$NEUTRON_HOME/bin/clang" --version >/dev/null 2>&1; then
+            echo "Neutron Clang needs glibc patching"
             ./antman --patch=glibc
           fi
 
@@ -179,9 +172,9 @@ jobs:
           command -v clang++
           command -v ld.lld
 
-          clang --version
-          clang++ --version
-          ld.lld --version
+          "$TOOLCHAIN_BIN/clang" --version
+          "$TOOLCHAIN_BIN/clang++" --version
+          "$TOOLCHAIN_BIN/ld.lld" --version
 
           cat > "$RUNNER_TEMP/neutron-test.c" <<'EOF'
           int main(void)
@@ -190,7 +183,7 @@ jobs:
           }
           EOF
 
-          clang \
+          "$TOOLCHAIN_BIN/clang" \
             -O2 \
             -fno-lto \
             -fno-pie \
@@ -231,10 +224,8 @@ jobs:
       - name: Initialize kernel source
         run: |
           set -euo pipefail
-
           mkdir -p kernel_workspace
           cd kernel_workspace
-
           repo init \
             -u https://android.googlesource.com/kernel/manifest \
             -b "$MANIFEST_REF" \
@@ -244,7 +235,6 @@ jobs:
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-
           repo sync \
             -c \
             --current-branch \
@@ -265,14 +255,12 @@ jobs:
               --depth=1 \
               "$REMOTE" \
               "refs/tags/$PIN_REF:refs/tags/$PIN_REF"
-
             git checkout "refs/tags/$PIN_REF"
           else
             git fetch \
               --depth=1 \
               "$REMOTE" \
               "refs/heads/$PIN_REF:refs/remotes/$REMOTE/$PIN_REF"
-
             git checkout -B \
               "$PIN_REF" \
               "refs/remotes/$REMOTE/$PIN_REF"
@@ -284,13 +272,10 @@ jobs:
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-
           VALUE="$(
             awk -F '= ' '/^SUBLEVEL = / { print $2; exit }' common/Makefile
           )"
-
           test -n "$VALUE"
-
           echo "SUBLEVEL=$VALUE" >> "$GITHUB_ENV"
           echo "Kernel sublevel: $VALUE"
 
@@ -307,39 +292,29 @@ jobs:
 
           if [ -n "${{ inputs.susfs_commit }}" ]; then
             cd susfs4ksu
-
             git fetch \
               --depth=1 \
               origin \
               "${{ inputs.susfs_commit }}"
-
             git checkout "${{ inputs.susfs_commit }}"
           fi
 
-          echo "SUSFS_COMMIT=$(git -C susfs4ksu rev-parse HEAD)" \
-            >> "$GITHUB_ENV"
+          echo "SUSFS_COMMIT=$(git -C susfs4ksu rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Copy SUSFS files
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
-
           cp ../susfs4ksu/kernel_patches/fs/* fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* include/linux/
-
-          cp \
-            ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch \
-            ./50_add_susfs_in_gki-android12-5.10.patch
-
+          cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch ./50_add_susfs_in_gki-android12-5.10.patch
           test -f 50_add_susfs_in_gki-android12-5.10.patch
 
       - name: Apply SUSFS patch
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
-
           PATCH_FILE="50_add_susfs_in_gki-android12-5.10.patch"
-
           if git apply --check --whitespace=nowarn "$PATCH_FILE" 2>/dev/null; then
             git apply --whitespace=nowarn "$PATCH_FILE"
           else
@@ -350,22 +325,18 @@ jobs:
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
-
           curl -fsSL \
             https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh \
             | bash -s dev-susfs
-
           test -d KernelSU-Next
 
       - name: Apply KernelSU static patch
         working-directory: kernel_workspace/common/KernelSU-Next
         run: |
           set -euo pipefail
-
           curl -fsSL \
             -o static.patch \
             https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/main/.github/actions/kernelsu/patches/static.patch
-
           if git apply --check static.patch 2>/dev/null; then
             git apply static.patch
           else
@@ -387,7 +358,6 @@ jobs:
             sed -i \
               's/mask,[[:space:]]*mark->ignored_mask/inotify_mark_user_mask(mark)/g' \
               fs/notify/fdinfo.c || true
-
             sed -i \
               's/ignored_mask:%x/ignored_mask:0/g' \
               fs/notify/fdinfo.c || true
@@ -409,7 +379,6 @@ jobs:
           set -euo pipefail
 
           rm -rf /tmp/wildpatches
-
           git clone \
             --depth=1 \
             https://github.com/WildKernels/kernel_patches.git \
@@ -428,16 +397,13 @@ jobs:
           fi
 
           git apply "$PATCH"
-
           echo "BBRV3_APPLIED=true" >> "$GITHUB_ENV"
 
       - name: Configure BBRv3
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
-
           CONFIG="arch/arm64/configs/gki_defconfig"
-
           cat >> "$CONFIG" <<'EOF'
           CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
@@ -493,9 +459,7 @@ jobs:
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
-
-          echo "CONFIG_NTSYNC=y" \
-            >> arch/arm64/configs/gki_defconfig
+          echo "CONFIG_NTSYNC=y" >> arch/arm64/configs/gki_defconfig
 
       - name: Apply Droidspaces patches
         working-directory: kernel_workspace/common
@@ -528,9 +492,7 @@ jobs:
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
-
           CONFIG="arch/arm64/configs/gki_defconfig"
-
           cat >> "$CONFIG" <<'EOF'
           CONFIG_SYSVIPC=y
           CONFIG_POSIX_MQUEUE=y
@@ -557,12 +519,10 @@ jobs:
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
-
           CONFIG="arch/arm64/configs/gki_defconfig"
-
           cat >> "$CONFIG" <<'EOF'
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
-      
+          EOF
