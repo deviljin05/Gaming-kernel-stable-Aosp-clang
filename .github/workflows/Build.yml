@@ -4,19 +4,19 @@ name: Build Android 12 GKI Kernel
   workflow_dispatch:
     inputs:
       os_patch_level:
-        description: "Exact GKI tag or lts"
+        description: "Exact GKI tag, for example android12-5.10.264_r00"
         required: true
         default: "android12-5.10.264_r00"
         type: string
 
       susfs_commit:
-        description: "Optional SUSFS commit"
+        description: "Optional SUSFS commit hash"
         required: false
         default: ""
         type: string
 
       device_name:
-        description: "Artifact name"
+        description: "Artifact/device label"
         required: false
         default: "gki-custom"
         type: string
@@ -28,7 +28,7 @@ name: Build Android 12 GKI Kernel
         type: string
 
       enable_extra_patches:
-        description: "Enable BBRv3/NTSync/Droidspaces experimental patches"
+        description: "Enable experimental BBRv3 and NTSync patches"
         required: false
         default: false
         type: boolean
@@ -58,9 +58,11 @@ jobs:
       - name: Free disk space
         run: |
           set -euo pipefail
+
           sudo rm -rf /usr/local/lib/android
           sudo rm -rf /usr/share/dotnet
           sudo rm -rf /opt/ghc
+
           df -h
 
       - name: Install dependencies
@@ -87,7 +89,6 @@ jobs:
             pahole \
             perl \
             python3 \
-            python3-pip \
             rsync \
             unzip \
             wget \
@@ -115,7 +116,7 @@ jobs:
 
           mkdir -p "$HOME/bin"
 
-          curl -fsSL \
+          curl -fL --retry 5 --retry-delay 5 \
             https://storage.googleapis.com/git-repo-downloads/repo \
             -o "$HOME/bin/repo"
 
@@ -138,51 +139,69 @@ jobs:
         run: |
           set -euo pipefail
 
+          TOOLCHAIN_DIR="$GITHUB_WORKSPACE/toolchains/neutron-clang"
+
           mkdir -p "$TOOLCHAIN_DIR"
           cd "$TOOLCHAIN_DIR"
 
-          curl -fsSL \
+          curl -fL --retry 5 --retry-delay 5 \
             https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman \
             -o antman
 
+          test -s antman
           chmod +x antman
 
           RELEASE="${{ inputs.compiler_release }}"
 
           if [ -z "$RELEASE" ] || [ "$RELEASE" = "latest" ]; then
-            ./antman -S=latest
+            ./antman -S latest
           else
-            ./antman -S="$RELEASE"
+            ./antman -S "$RELEASE"
           fi
 
-          test -x "$TOOLCHAIN_DIR/bin/clang"
-          test -x "$TOOLCHAIN_DIR/bin/clang++"
-          test -x "$TOOLCHAIN_DIR/bin/ld.lld"
-          test -x "$TOOLCHAIN_DIR/bin/llvm-ar"
-          test -x "$TOOLCHAIN_DIR/bin/llvm-nm"
-          test -x "$TOOLCHAIN_DIR/bin/llvm-objcopy"
-          test -x "$TOOLCHAIN_DIR/bin/llvm-objdump"
-          test -x "$TOOLCHAIN_DIR/bin/llvm-readelf"
-          test -x "$TOOLCHAIN_DIR/bin/llvm-strip"
+          echo "Searching for installed Neutron Clang binaries..."
 
-          echo "$TOOLCHAIN_DIR/bin" >> "$GITHUB_PATH"
+          CLANG_PATH="$(find "$TOOLCHAIN_DIR" -type f -name clang -perm -111 | head -n1 || true)"
+          CLANGXX_PATH="$(find "$TOOLCHAIN_DIR" -type f -name clang++ -perm -111 | head -n1 || true)"
+          LLD_PATH="$(find "$TOOLCHAIN_DIR" -type f -name ld.lld -perm -111 | head -n1 || true)"
+
+          if [ -z "$CLANG_PATH" ] || [ -z "$CLANGXX_PATH" ] || [ -z "$LLD_PATH" ]; then
+            echo "ERROR: Neutron Clang binaries were not found."
+            echo "Toolchain contents:"
+            find "$TOOLCHAIN_DIR" -maxdepth 6 -type f | sort | head -n 300
+            exit 1
+          fi
+
+          TOOLCHAIN_BIN="$(dirname "$CLANG_PATH")"
+
+          echo "TOOLCHAIN_DIR=$TOOLCHAIN_DIR" >> "$GITHUB_ENV"
+          echo "TOOLCHAIN_BIN=$TOOLCHAIN_BIN" >> "$GITHUB_ENV"
+          echo "$TOOLCHAIN_BIN" >> "$GITHUB_PATH"
+
+          echo "Neutron Clang directory: $TOOLCHAIN_BIN"
+          echo "clang: $CLANG_PATH"
+          echo "clang++: $CLANGXX_PATH"
+          echo "ld.lld: $LLD_PATH"
 
       - name: Verify Neutron Clang
         run: |
           set -euo pipefail
 
-          TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
+          test -n "${TOOLCHAIN_BIN:-}"
+          test -x "$TOOLCHAIN_BIN/clang"
+          test -x "$TOOLCHAIN_BIN/clang++"
+          test -x "$TOOLCHAIN_BIN/ld.lld"
 
           "$TOOLCHAIN_BIN/clang" --version
           "$TOOLCHAIN_BIN/clang++" --version
           "$TOOLCHAIN_BIN/ld.lld" --version
 
-          cat > /tmp/clang-test.c <<'EOF'
+          cat > "$RUNNER_TEMP/neutron-test.c" <<'EOF'
           #include <stdio.h>
 
           int main(void)
           {
-              puts("neutron-clang-ok");
+              puts("neutron-clang-test-ok");
               return 0;
           }
           EOF
@@ -192,10 +211,12 @@ jobs:
             -fno-lto \
             -fno-pie \
             -no-pie \
-            /tmp/clang-test.c \
-            -o /tmp/clang-test
+            "$RUNNER_TEMP/neutron-test.c" \
+            -o "$RUNNER_TEMP/neutron-test"
 
-          /tmp/clang-test
+          "$RUNNER_TEMP/neutron-test"
+
+          echo "Neutron Clang verification successful."
 
       - name: Resolve manifest
         run: |
@@ -218,6 +239,8 @@ jobs:
             echo "PIN_TYPE=branch" >> "$GITHUB_ENV"
             echo "PIN_REF=$INPUT" >> "$GITHUB_ENV"
           fi
+
+          echo "Manifest: $MANIFEST_REF"
 
       - name: Initialize kernel manifest
         run: |
@@ -269,7 +292,9 @@ jobs:
               "refs/remotes/$REMOTE/$PIN_REF"
           fi
 
-      - name: Read kernel version
+          git describe --always --dirty
+
+      - name: Read kernel sublevel
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
@@ -352,7 +377,7 @@ jobs:
           if git apply --check --whitespace=nowarn "$PATCH_FILE" 2>/dev/null; then
             git apply --whitespace=nowarn "$PATCH_FILE"
           else
-            echo "SUSFS patch already applied or incompatible with selected kernel."
+            echo "SUSFS patch already applied or not cleanly applicable."
           fi
 
       - name: Fix SUSFS nameidata
@@ -390,7 +415,7 @@ jobs:
             echo "KernelSU static patch already applied or skipped."
           fi
 
-      - name: Configure basic kernel features
+      - name: Configure kernel features
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
@@ -418,7 +443,7 @@ jobs:
           CONFIG_NTSYNC=y
           EOF
 
-      - name: Apply optional experimental patches
+      - name: Apply optional extra patches
         if: ${{ inputs.enable_extra_patches == true }}
         working-directory: kernel_workspace/common
         run: |
@@ -472,14 +497,18 @@ jobs:
           test -f common/build.config.gki
           sed -i 's/check_defconfig//g' common/build.config.gki
 
-      - name: Build kernel
+      - name: Build kernel with Neutron Clang
         working-directory: kernel_workspace
         run: |
           set -euxo pipefail
 
-          TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
+          test -n "${TOOLCHAIN_BIN:-}"
+          test -x "$TOOLCHAIN_BIN/clang"
+          test -x "$TOOLCHAIN_BIN/clang++"
+          test -x "$TOOLCHAIN_BIN/ld.lld"
 
           export PATH="$TOOLCHAIN_BIN:$PATH"
+
           export LLVM=1
           export LLVM_IAS=1
 
@@ -501,12 +530,16 @@ jobs:
 
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CLANG_TRIPLE=aarch64-linux-gnu-
+          export LTO=thin
           export USE_CCACHE=1
           export CCACHE_DIR="$CCACHE_DIR"
-          export LTO=thin
 
           rm -rf out
           mkdir -p out
+
+          "$CC" --version | head -n3
+          "$HOSTCC" --version | head -n3
+          "$LD" --version | head -n2
 
           make -C common \
             O="$PWD/out" \
@@ -529,6 +562,7 @@ jobs:
           CCACHE_DIR="$CCACHE_DIR" \
           build/build.sh \
             -j2 \
+            V=1 \
             LLVM=1 \
             LLVM_IAS=1 \
             ARCH=arm64 \
@@ -537,48 +571,4 @@ jobs:
             LD="$LD" \
             AR="$AR" \
             NM="$NM" \
-            OBJCOPY="$OBJCOPY" \
-            OBJDUMP="$OBJDUMP" \
-            READELF="$READELF" \
-            STRIP="$STRIP" \
-            HOSTCC="$HOSTCC" \
-            HOSTCXX="$HOSTCXX" \
-            HOSTLD="$HOSTLD" \
-            HOSTAR="$HOSTAR" \
-            HOSTNM="$HOSTNM" \
-            CROSS_COMPILE="$CROSS_COMPILE" \
-            CLANG_TRIPLE="$CLANG_TRIPLE"
-
-      - name: Verify build configuration
-        working-directory: kernel_workspace
-        run: |
-          set -euo pipefail
-
-          CFG="$(find out -type f -name .config | head -n1)"
-
-          test -n "$CFG"
-          test -f "$CFG"
-
-          grep -q '^CONFIG_CC_IS_CLANG=y$' "$CFG"
-          grep -q '^CONFIG_CLANG_VERSION=' "$CFG"
-
-          grep -E \
-            'CONFIG_CC_IS_CLANG|CONFIG_CLANG_VERSION|CONFIG_LTO|CONFIG_KSU|CONFIG_NTSYNC' \
-            "$CFG" || true
-
-      - name: Verify kernel image
-        working-directory: kernel_workspace
-        run: |
-          set -euo pipefail
-
-          IMAGE="$(find out -type f -path '*/dist/Image' | head -n1 || true)"
-
-          if [ -z "$IMAGE" ]; then
-            IMAGE="$(find out -type f -name Image | head -n1 || true)"
-          fi
-
-          test -n "$IMAGE"
-          test -f "$IMAGE"
-
-          mkdir -p artifact-output
-          cp "$IMAGE" artifact-out
+            O
