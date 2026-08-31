@@ -114,7 +114,7 @@ jobs:
       - name: Verify Neutron clang
         run: |
           set -euo pipefail
-          export PATH="$TOOLCHAIN_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
           command -v clang
           clang --version
           case "$(command -v clang)" in
@@ -195,14 +195,12 @@ jobs:
           for f in build.config.common build.config.gki build.config.gki.aarch64; do
             [ -f "$f" ] || continue
             if grep -q '^CLANG_PREBUILT_BIN=' "$f"; then
-              sed -i "s#^CLANG_PREBUILT_BIN=.*#CLANG_PREBUILT_BIN=${TOOLCHAIN_BIN}#" "$f"
+              sed -i 's#^CLANG_PREBUILT_BIN=.*#CLANG_PREBUILT_BIN=neutron-clang/bin#' "$f"
             else
-              echo "CLANG_PREBUILT_BIN=${TOOLCHAIN_BIN}" >> "$f"
+              echo 'CLANG_PREBUILT_BIN=neutron-clang/bin' >> "$f"
             fi
           done
-          if [ -f build.config.common ]; then
-            grep -q '^LLVM=1' build.config.common || echo 'LLVM=1' >> build.config.common
-          fi
+          grep -q '^LLVM=1' build.config.common 2>/dev/null || echo 'LLVM=1' >> build.config.common
 
       - name: Force localversion controls
         working-directory: kernel_workspace/common
@@ -214,7 +212,7 @@ jobs:
           #!/bin/sh
           printf -- '-NEUTRON'
           EOF
-          chmod +x scripts/setlocalversion
+            chmod +x scripts/setlocalversion
           fi
           if ! grep -q '^CONFIG_LOCALVERSION_AUTO=n' arch/arm64/configs/gki_defconfig; then
             echo 'CONFIG_LOCALVERSION_AUTO=n' >> arch/arm64/configs/gki_defconfig
@@ -458,7 +456,7 @@ jobs:
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          export PATH="$TOOLCHAIN_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
           export CC=clang
           export CXX=clang++
           export LD=ld.lld
@@ -479,10 +477,9 @@ jobs:
           export KBUILD_BUILD_TIMESTAMP="Mon Aug 31 00:00:00 UTC 2026"
           export KBUILD_BUILD_VERSION=1
           export LOCALVERSION=
-          export CLANG_PREBUILT_BIN="$TOOLCHAIN_BIN"
           rm -rf out
           NPROC="$(getconf _NPROCESSORS_ONLN || echo 2)"
-          BUILD_CONFIG=common/build.config.gki.aarch64 CLANG_PREBUILT_BIN="$TOOLCHAIN_BIN" USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" build/build.sh -j"${NPROC}"
+          CLANG_PREBUILT_BIN=neutron-clang/bin BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" build/build.sh -j"${NPROC}"
 
       - name: Verify compile header
         working-directory: kernel_workspace
@@ -491,7 +488,6 @@ jobs:
           H=$(find out -path "*include/generated/compile.h" | head -n1)
           [ -n "$H" ]
           cat "$H"
-          grep -q "Neutron" "$H" || true
 
       - name: Locate built Image
         working-directory: kernel_workspace
