@@ -24,7 +24,6 @@ env:
   VERSION: android12-5.10
   CCACHE_DIR: /home/runner/.ccache
   TOOLCHAIN_DIR: /home/runner/toolchains/neutron-clang
-  PATH: /home/runner/toolchains/neutron-clang/bin:/home/runner/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 jobs:
   build:
@@ -334,6 +333,7 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$TOOLCHAIN_DIR/bin:$PATH"
+          export CLANG_PATH="$TOOLCHAIN_DIR/bin"
           export LLVM=1
           export CC=clang
           export HOSTCC=clang
