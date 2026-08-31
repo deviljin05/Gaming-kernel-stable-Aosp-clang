@@ -41,7 +41,7 @@ env:
   VERSION: android12-5.10
   CCACHE_DIR: /home/runner/.ccache
   NEUTRON_HOME: ${{ github.workspace }}/kernel_workspace/neutron-clang
-  TOOLCHAIN_BIN: ${{ github.workspace }}/neutron-clang/bin
+  TOOLCHAIN_BIN: ${{ github.workspace }}/kernel_workspace/neutron-clang/bin
   BUILD_USER: Neutron
   BUILD_HOST: clang
 
