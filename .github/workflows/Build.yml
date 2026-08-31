@@ -43,18 +43,11 @@ jobs:
       - name: Deps
         run: |
           set -euo pipefail
-          # NOTE: pacman-key --init / --populate is intentionally NOT run
-          # here — in minimal Docker containers it can hang indefinitely
-          # waiting on entropy for GPG key generation. The official
-          # archlinux Docker image already ships with an initialized
-          # keyring, so we only need to refresh the keyring package itself.
           pacman -Sy --noconfirm archlinux-keyring
           pacman -Syu --noconfirm
           pacman -S --noconfirm --needed \
             base-devel git curl wget bc bison flex openssl \
             python ncurses ccache zip unzip dtc patchelf file perl
-          # Fail loudly here instead of further down the workflow if
-          # something still didn't actually get installed.
           command -v wget
           command -v git
           command -v curl
@@ -80,13 +73,6 @@ jobs:
           curl -fsSL -o antman https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman
           chmod +x antman
           ./antman -S="${{ github.event.inputs.compiler_release }}"
-          # NOTE: --patch=glibc is intentionally NOT run here.
-          # That patch exists only for distros with an older glibc than
-          # Neutron Clang needs; it works by downloading Arch Linux's own
-          # glibc/glibcxx packages and patching the toolchain to use them.
-          # Since we're now running natively on Arch Linux, the toolchain
-          # already gets the exact glibc/glibcxx it was built against,
-          # so the patch (and its flaky Arch-mirror download) is unnecessary.
           test -x "$TOOLCHAIN_DIR/bin/clang"
           test -x "$TOOLCHAIN_DIR/bin/ld.lld"
 
@@ -180,7 +166,7 @@ jobs:
           cd kernel_workspace/common
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
-          cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch ./
+          cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch .
 
       - name: Prep fixes
         working-directory: kernel_workspace/common
@@ -190,7 +176,7 @@ jobs:
             perl -i -pe 's/(int|size_t)s+this_lens*=s*min_ts*(s*\u0001s*,/size_t this_len = min_t(size_t,/' fs/proc/base.c
           fi
           if [ "$SUBLEVEL" -le "117" ]; then
-            sed -i '#^[[:space:]]*/*$#,#^[[:space:]]*u32 mask = mark->mask & IN_ALL_EVENTS;$#d' fs/notify/fdinfo.c
+            sed -i '/^[[:space:]]*$/,/^[[:space:]]*u32 mask = mark->mask & IN_ALL_EVENTS;$/d' fs/notify/fdinfo.c
             perl -i -pe 's/\bmask,s*mark->ignored_mask/inotify_mark_user_mask(mark)/g' fs/notify/fdinfo.c
             perl -i -pe 's/ignored_mask:%x/ignored_mask:0/g' fs/notify/fdinfo.c
           fi
@@ -339,11 +325,6 @@ jobs:
           export STRIP="$TOOLCHAIN_BIN/llvm-strip"
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          # HOSTCC/HOSTCXX/HOSTLD are Neutron Clang itself here (not gcc).
-          # On Ubuntu this segfaulted building host tools like fixdep because
-          # the toolchain's glibc requirement didn't match the host. Running
-          # natively on Arch Linux (matching what Neutron Clang is built
-          # against) should let host tool binaries run correctly.
           export BUILD_CONFIG=common/build.config.gki.aarch64
           export USE_CCACHE=1
           export CCACHE_DIR="$CCACHE_DIR"
