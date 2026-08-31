@@ -118,37 +118,30 @@ jobs:
 
           echo "$TOOLCHAIN_BIN" >> "$GITHUB_PATH"
 
-      - name: Verify Neutron Clang
+      - name: Verify Neutron Clang at start
         run: |
           set -euo pipefail
+          export PATH="$TOOLCHAIN_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          export CC=clang
+          export CXX=clang++
+          export LD=ld.lld
 
-          export PATH="$TOOLCHAIN_BIN:$PATH"
+          echo "CLANG_PATH=$(command -v clang)"
+          echo "CLANGPP_PATH=$(command -v clang++)"
+          echo "LDLLD_PATH=$(command -v ld.lld)"
 
-          command -v clang
-          command -v clang++
-          command -v ld.lld
+          readlink -f "$(command -v clang)"
+          readlink -f "$(command -v clang++)"
+          readlink -f "$(command -v ld.lld)"
 
           clang --version
           clang++ --version
           ld.lld --version
 
-          cat > "$RUNNER_TEMP/neutron-test.c" <<'EOF'
-          int main(void)
-          {
-              return 0;
-          }
-          EOF
-
-          clang \
-            -O2 \
-            -fno-lto \
-            -fno-pie \
-            -no-pie \
-            "$RUNNER_TEMP/neutron-test.c" \
-            -o "$RUNNER_TEMP/neutron-test"
-
-          "$RUNNER_TEMP/neutron-test"
-          echo "Neutron Clang verification successful."
+          case "$(command -v clang)" in
+            "$TOOLCHAIN_BIN"/*) : ;;
+            *) echo "clang is not coming from Neutron toolchain"; exit 1 ;;
+          esac
 
       - name: Resolve manifest branch and optional pinned release tag
         run: |
@@ -526,8 +519,8 @@ jobs:
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${TOOLCHAIN_BIN}:${PATH}"
-          export NPROC="$(getconf _NPROCESSORS_ONLN || echo 2)"
+
+          export PATH="$TOOLCHAIN_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
           export CC=clang
           export CXX=clang++
           export LD=ld.lld
@@ -537,9 +530,22 @@ jobs:
           export OBJDUMP=llvm-objdump
           export READELF=llvm-readelf
           export STRIP=llvm-strip
+          export HOSTCC=clang
+          export HOSTCXX=clang++
+          export HOSTAR=llvm-ar
+          export HOSTLD=ld.lld
           export LLVM=1
           export LLVM_IAS=1
-          LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" build/build.sh -j"${NPROC}"
+
+          echo "BUILD_CLANG=$(readlink -f "$(command -v clang)")"
+          echo "BUILD_CLANGXX=$(readlink -f "$(command -v clang++)")"
+          echo "BUILD_LLD=$(readlink -f "$(command -v ld.lld)")"
+          clang --version
+          clang++ --version
+          ld.lld --version
+
+          NPROC="$(getconf _NPROCESSORS_ONLN || echo 2)"
+          LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" CC=clang CXX=clang++ LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip HOSTCC=clang HOSTCXX=clang++ HOSTAR=llvm-ar HOSTLD=ld.lld LLVM=1 LLVM_IAS=1 build/build.sh -j"${NPROC}"
 
       - name: Verify final configs
         working-directory: kernel_workspace
@@ -550,6 +556,18 @@ jobs:
           for SYM in CONFIG_NAMESPACES CONFIG_NET_NS CONFIG_PID_NS CONFIG_CGROUPS CONFIG_USER_NS; do
             grep -q "^${SYM}=y$" "$CFG"
           done
+
+      - name: Post-build compiler proof
+        working-directory: kernel_workspace
+        run: |
+          set -euo pipefail
+          export PATH="$TOOLCHAIN_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          clang --version
+          command -v clang
+          case "$(command -v clang)" in
+            "$TOOLCHAIN_BIN"/*) : ;;
+            *) echo "Post-build clang is not Neutron"; exit 1 ;;
+          esac
 
       - name: Locate built Image
         working-directory: kernel_workspace
