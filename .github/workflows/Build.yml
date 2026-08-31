@@ -42,9 +42,23 @@ jobs:
 
       - name: Deps
         run: |
-          pacman -Syu --noconfirm --needed \
+          set -euo pipefail
+          # NOTE: pacman-key --init / --populate is intentionally NOT run
+          # here — in minimal Docker containers it can hang indefinitely
+          # waiting on entropy for GPG key generation. The official
+          # archlinux Docker image already ships with an initialized
+          # keyring, so we only need to refresh the keyring package itself.
+          pacman -Sy --noconfirm archlinux-keyring
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm --needed \
             base-devel git curl wget bc bison flex openssl \
             python ncurses ccache zip unzip dtc patchelf file perl
+          # Fail loudly here instead of further down the workflow if
+          # something still didn't actually get installed.
+          command -v wget
+          command -v git
+          command -v curl
+          command -v python3 || command -v python
 
       - name: Repo tool
         run: |
