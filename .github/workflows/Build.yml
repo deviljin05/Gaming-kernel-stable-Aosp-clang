@@ -81,7 +81,7 @@ jobs:
           echo "$LLD_LINE"
           echo "$CLANG_LINE" | grep -qi neutron
           if echo "$CLANG_LINE" | grep -qi 'clang version 12'; then
-            echo "clang 12 detected, stop"
+            echo "clang 12 detected"
             exit 1
           fi
 
@@ -351,7 +351,7 @@ jobs:
           export USE_CCACHE=1
           export CCACHE_DIR="$CCACHE_DIR"
           export LTO=thin
-          build/build.sh -j4
+          build/build.sh -j4 CC=clang LLVM=1 LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip HOSTCC=clang HOSTCXX=clang++
 
       - name: Kconfig
         working-directory: kernel_workspace
@@ -361,6 +361,14 @@ jobs:
           [ -n "$CFG" ]
           grep -q '^CONFIG_CC_IS_CLANG=y$' "$CFG"
           grep -q '^CONFIG_CLANG_VERSION=' "$CFG"
+
+      - name: Compile info
+        working-directory: kernel_workspace
+        run: |
+          set -euo pipefail
+          HFILE="$(find out -path '*include/generated/compile.h' | head -n1)"
+          [ -n "$HFILE" ]
+          grep -E 'LINUX_COMPILER|LINUX_COMPILER_VERSION' "$HFILE" || true
 
       - name: Image verify
         working-directory: kernel_workspace
