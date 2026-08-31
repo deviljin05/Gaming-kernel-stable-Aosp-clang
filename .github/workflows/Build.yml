@@ -79,7 +79,7 @@ jobs:
           set -euo pipefail
           mkdir -p ~/bin
           curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o ~/bin/repo
-          chmod a+x ~/bin/repo
+          chmod +x ~/bin/repo
           echo "$HOME/bin" >> "$GITHUB_PATH"
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -87,7 +87,7 @@ jobs:
       - name: Set up ccache
         run: |
           set -euo pipefail
-          mkdir -p "${CCACHE_DIR}"
+          mkdir -p "$CCACHE_DIR"
 
       - name: Download Neutron Clang
         run: |
@@ -128,7 +128,7 @@ jobs:
             MANIFEST_REF="common-${VERSION}-lts"
             PIN_REF=""
             PIN_TYPE=""
-          elif [[ "${INPUT}" =~ ^${VERSION}.[0-9]+_r[0-9]+$ ]]; then
+          elif [[ "${INPUT}" =~ ^${VERSION}\.[0-9]+_r[0-9]+$ ]]; then
             MANIFEST_REF="common-${VERSION}"
             PIN_REF="${INPUT}"
             PIN_TYPE="tag"
@@ -195,25 +195,28 @@ jobs:
             if grep -q '^CLANG_PREBUILT_BIN=' "$f"; then
               sed -i 's#^CLANG_PREBUILT_BIN=.*#CLANG_PREBUILT_BIN=neutron-clang/bin#' "$f"
             else
-              echo 'CLANG_PREBUILT_BIN=neutron-clang/bin' >> "$f"
+              printf '%s\n' 'CLANG_PREBUILT_BIN=neutron-clang/bin' >> "$f"
             fi
           done
-          grep -q '^LLVM=1' build.config.common 2>/dev/null || echo 'LLVM=1' >> build.config.common
+          grep -q '^LLVM=1' build.config.common 2>/dev/null || printf '%s\n' 'LLVM=1' >> build.config.common
 
-      - name: Force localversion controls
+      - name: Force local version control
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
-          echo "-NEUTRON" > .scmversion
+          printf '%s\n' '-NEUTRON' > .scmversion
           if [ -f scripts/setlocalversion ]; then
             cat > scripts/setlocalversion <<'EOF'
           #!/bin/sh
-            printf -- '-NEUTRON'
-            EOF
+          printf '%s' '-NEUTRON'
+          EOF
             chmod +x scripts/setlocalversion
           fi
           if ! grep -q '^CONFIG_LOCALVERSION_AUTO=n' arch/arm64/configs/gki_defconfig; then
-            echo 'CONFIG_LOCALVERSION_AUTO=n' >> arch/arm64/configs/gki_defconfig
+            printf '%s\n' 'CONFIG_LOCALVERSION_AUTO=n' >> arch/arm64/configs/gki_defconfig
+          fi
+          if ! grep -q '^CONFIG_LOCALVERSION="-NEUTRON"' arch/arm64/configs/gki_defconfig; then
+            printf '%s\n' 'CONFIG_LOCALVERSION="-NEUTRON"' >> arch/arm64/configs/gki_defconfig
           fi
 
       - name: Set SUSFS configs
@@ -221,17 +224,17 @@ jobs:
           set -euo pipefail
           cd kernel_workspace/common/arch/arm64/configs
           {
-            echo "CONFIG_KSU=y"
-            echo "CONFIG_KSU_SUSFS=y"
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y"
-            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y"
-            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y"
-            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y"
-            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y"
-            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y"
-            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y"
-            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y"
-            echo "CONFIG_KSU_SUSFS_SUS_MAP=y"
+            printf '%s\n' 'CONFIG_KSU=y'
+            printf '%s\n' 'CONFIG_KSU_SUSFS=y'
+            printf '%s\n' 'CONFIG_KSU_SUSFS_SUS_PATH=y'
+            printf '%s\n' 'CONFIG_KSU_SUSFS_SUS_MOUNT=y'
+            printf '%s\n' 'CONFIG_KSU_SUSFS_SUS_KSTAT=y'
+            printf '%s\n' 'CONFIG_KSU_SUSFS_SPOOF_UNAME=y'
+            printf '%s\n' 'CONFIG_KSU_SUSFS_ENABLE_LOG=y'
+            printf '%s\n' 'CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y'
+            printf '%s\n' 'CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y'
+            printf '%s\n' 'CONFIG_KSU_SUSFS_OPEN_REDIRECT=y'
+            printf '%s\n' 'CONFIG_KSU_SUSFS_SUS_MAP=y'
           } >> gki_defconfig
 
       - name: Copy SUSFS kernel patches
@@ -247,11 +250,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${SUBLEVEL}" -le "43" ]; then
-            perl -i -pe 's/(int|size_t)s+this_lens*=s*min_ts*(s*\u0001s*,/size_t this_len = min_t(size_t,/' fs/proc/base.c
+            perl -i -pe 's/(int|size_t)\s+this_len\s*=\s*min_t\s*\(\s*\1\s*,/size_t this_len = min_t(size_t,/' fs/proc/base.c
           fi
           if [ "${SUBLEVEL}" -le "117" ]; then
-            sed -i '#^[[:space:]]*/*$#,#^[[:space:]]*u32 mask = mark->mask & IN_ALL_EVENTS;$#d' fs/notify/fdinfo.c
-            perl -i -pe 's/\bmask,s*mark->ignored_mask/inotify_mark_user_mask(mark)/g' fs/notify/fdinfo.c
+            sed -i '/^[[:space:]]*\/\*$/,/^[[:space:]]*u32 mask = mark->mask & IN_ALL_EVENTS;$/d' fs/notify/fdinfo.c
+            perl -i -pe 's/\bmask,\s*mark->ignored_mask/inotify_mark_user_mask(mark)/g' fs/notify/fdinfo.c
             perl -i -pe 's/ignored_mask:%x/ignored_mask:0/g' fs/notify/fdinfo.c
           fi
 
@@ -275,13 +278,8 @@ jobs:
             sed -i 's/^size_t this_len = min_t(size_t, count, PAGE_SIZE);$/int this_len = min_t(int, count, PAGE_SIZE);/' fs/proc/base.c
           fi
           if [ "${SUBLEVEL}" -le "117" ]; then
-            perl -i -pe 's#^(s+if (inode) {)#$1
-            \t\t/*
-            \t\t * IN_ALL_EVENTS represents all of the mask bits
-            \t\t * that we expose to userspace.
-            \t\t */
-            \t\tu32 mask = mark->mask & IN_ALL_EVENTS;#m' fs/notify/fdinfo.c
-            perl -i -pe 's/\binotify_mark_user_mask(mark)/mask, mark->ignored_mask/g' fs/notify/fdinfo.c
+            perl -i -pe 's#^(\s+if \(inode\) \{)#$1\n\t\t/*\n\t\t * IN_ALL_EVENTS represents all of the mask bits\n\t\t * that we expose to userspace.\n\t\t *\/\n\t\tu32 mask = mark->mask \& IN_ALL_EVENTS;#m' fs/notify/fdinfo.c
+            perl -i -pe 's/\binotify_mark_user_mask\(mark\)/mask, mark->ignored_mask/g' fs/notify/fdinfo.c
             perl -i -pe 's/ignored_mask:0/ignored_mask:%x/g' fs/notify/fdinfo.c
           fi
 
@@ -303,8 +301,7 @@ jobs:
         working-directory: kernel_workspace/common/KernelSU-Next
         run: |
           set -euo pipefail
-          curl -fsSL -o static.patch \
-            https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/main/.github/actions/kernelsu/patches/static.patch
+          curl -fsSL -o static.patch https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/main/.github/actions/kernelsu/patches/static.patch
           patch -p1 --forward < static.patch || true
 
       - name: Apply BBRv3 backport
@@ -317,7 +314,7 @@ jobs:
           BBRV3_PATCH_APPLIED="false"
           if [ -f "$BBRV3_PATCH" ] && patch -p1 < "$BBRV3_PATCH"; then
             BBRV3_PATCH_APPLIED="true"
-            DETECTED="$(grep -rhoE '.names*=s*"[a-zA-Z0-9_]+"' net/ipv4/tcp_bbr*.c 2>/dev/null | grep -oE '"[a-zA-Z0-9_]+"' | tr -d '"' | head -n1 || true)"
+            DETECTED="$(grep -rhoE '\.name\s*=\s*"[a-zA-Z0-9_]+"' net/ipv4/tcp_bbr*.c 2>/dev/null | grep -oE '"[a-zA-Z0-9_]+"' | tr -d '"' | head -n1 || true)"
             [ -n "$DETECTED" ] && BBR_CONG_NAME="$DETECTED"
           fi
           echo "BBR_CONG_NAME=${BBR_CONG_NAME}" >> "$GITHUB_ENV"
@@ -328,19 +325,19 @@ jobs:
           set -euo pipefail
           cd kernel_workspace/common/arch/arm64/configs
           {
-            echo "CONFIG_TCP_CONG_ADVANCED=y"
-            echo "CONFIG_TCP_CONG_BBR=y"
-            echo "CONFIG_TCP_CONG_CUBIC=y"
-            echo "CONFIG_TCP_CONG_BIC=y"
-            echo "CONFIG_TCP_CONG_WESTWOOD=y"
-            echo "CONFIG_TCP_CONG_HTCP=y"
+            printf '%s\n' 'CONFIG_TCP_CONG_ADVANCED=y'
+            printf '%s\n' 'CONFIG_TCP_CONG_BBR=y'
+            printf '%s\n' 'CONFIG_TCP_CONG_CUBIC=y'
+            printf '%s\n' 'CONFIG_TCP_CONG_BIC=y'
+            printf '%s\n' 'CONFIG_TCP_CONG_WESTWOOD=y'
+            printf '%s\n' 'CONFIG_TCP_CONG_HTCP=y'
             if [ "${BBRV3_PATCH_APPLIED}" = "true" ]; then
-              echo "CONFIG_TCP_CONG_BBR3=y"
+              printf '%s\n' 'CONFIG_TCP_CONG_BBR3=y'
             fi
-            echo "CONFIG_DEFAULT_TCP_CONG=${BBR_CONG_NAME}"
-            echo "CONFIG_NET_SCH_FQ=y"
-            echo "CONFIG_NET_SCH_FQ_CODEL=y"
-            echo "CONFIG_NET_SCH_CAKE=y"
+            printf '%s\n' "CONFIG_DEFAULT_TCP_CONG=${BBR_CONG_NAME}"
+            printf '%s\n' 'CONFIG_NET_SCH_FQ=y'
+            printf '%s\n' 'CONFIG_NET_SCH_FQ_CODEL=y'
+            printf '%s\n' 'CONFIG_NET_SCH_CAKE=y'
           } >> gki_defconfig
 
       - name: Apply NTSync patches
@@ -348,30 +345,25 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${SUBLEVEL}" -le "208" ]; then
-            curl -fsSL -o /tmp/0003-lockdep-assert-none-held.patch \
-              https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/main/.github/actions/ntsync/patches/0003-lockdep-assert-none-held.patch
+            curl -fsSL -o /tmp/0003-lockdep-assert-none-held.patch https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/main/.github/actions/ntsync/patches/0003-lockdep-assert-none-held.patch
             patch -p1 -N < /tmp/0003-lockdep-assert-none-held.patch || true
           fi
-          curl -fsSL -o /tmp/ntsync_compat_android12-5.10.patch \
-            https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_compat_android12-5.10.patch
+          curl -fsSL -o /tmp/ntsync_compat_android12-5.10.patch https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_compat_android12-5.10.patch
           patch -p1 < /tmp/ntsync_compat_android12-5.10.patch || true
-          curl -fsSL -o /tmp/ntsync_base.patch \
-            https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_base.patch
+          curl -fsSL -o /tmp/ntsync_base.patch https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_base.patch
           patch -p1 < /tmp/ntsync_base.patch || true
-          echo "CONFIG_NTSYNC=y" >> arch/arm64/configs/gki_defconfig
+          printf '%s\n' 'CONFIG_NTSYNC=y' >> arch/arm64/configs/gki_defconfig
 
       - name: Apply Droidspaces kABI-safe patches
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
           DROIDSPACES_KABI_OK="true"
-          curl -fsSL -o /tmp/droidspaces_sysvipc_kabi.patch \
-            https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
+          curl -fsSL -o /tmp/droidspaces_sysvipc_kabi.patch https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
           if ! patch -p1 < /tmp/droidspaces_sysvipc_kabi.patch; then
             DROIDSPACES_KABI_OK="false"
           fi
-          curl -fsSL -o /tmp/droidspaces_posix_mqueue_kabi.patch \
-            https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch
+          curl -fsSL -o /tmp/droidspaces_posix_mqueue_kabi.patch https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch
           if ! patch -p1 < /tmp/droidspaces_posix_mqueue_kabi.patch; then
             DROIDSPACES_KABI_OK="false"
           fi
@@ -383,59 +375,30 @@ jobs:
           cd kernel_workspace/common/arch/arm64/configs
           if [ "${DROIDSPACES_KABI_OK}" = "true" ]; then
             {
-              echo "CONFIG_SYSVIPC=y"
-              echo "CONFIG_POSIX_MQUEUE=y"
-              echo "CONFIG_IPC_NS=y"
+              printf '%s\n' 'CONFIG_SYSVIPC=y'
+              printf '%s\n' 'CONFIG_POSIX_MQUEUE=y'
+              printf '%s\n' 'CONFIG_IPC_NS=y'
             } >> gki_defconfig
           fi
           {
-            echo "CONFIG_NAMESPACES=y"
-            echo "CONFIG_NET_NS=y"
-            echo "CONFIG_CGROUPS=y"
-            echo "CONFIG_PID_NS=y"
-            echo "CONFIG_USER_NS=y"
-            echo "CONFIG_DEVTMPFS=y"
-            echo "CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y"
-            echo "CONFIG_NETFILTER_XT_TARGET_REJECT=y"
-            echo "CONFIG_NETFILTER_XT_TARGET_LOG=y"
-            echo "CONFIG_NETFILTER_XT_MATCH_RECENT=y"
-            echo "CONFIG_IP_SET=y"
-            echo "CONFIG_IP_SET_HASH_IP=y"
-            echo "CONFIG_IP_SET_HASH_NET=y"
-            echo "CONFIG_NETFILTER_XT_SET=y"
-            echo "CONFIG_TMPFS_POSIX_ACL=y"
-            echo "CONFIG_TMPFS_XATTR=y"
-            echo "CONFIG_LOCALVERSION_AUTO=n"
+            printf '%s\n' 'CONFIG_NAMESPACES=y'
+            printf '%s\n' 'CONFIG_NET_NS=y'
+            printf '%s\n' 'CONFIG_CGROUPS=y'
+            printf '%s\n' 'CONFIG_PID_NS=y'
+            printf '%s\n' 'CONFIG_USER_NS=y'
+            printf '%s\n' 'CONFIG_DEVTMPFS=y'
+            printf '%s\n' 'CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y'
+            printf '%s\n' 'CONFIG_NETFILTER_XT_TARGET_REJECT=y'
+            printf '%s\n' 'CONFIG_NETFILTER_XT_TARGET_LOG=y'
+            printf '%s\n' 'CONFIG_NETFILTER_XT_MATCH_RECENT=y'
+            printf '%s\n' 'CONFIG_IP_SET=y'
+            printf '%s\n' 'CONFIG_IP_SET_HASH_IP=y'
+            printf '%s\n' 'CONFIG_IP_SET_HASH_NET=y'
+            printf '%s\n' 'CONFIG_NETFILTER_XT_SET=y'
+            printf '%s\n' 'CONFIG_TMPFS_POSIX_ACL=y'
+            printf '%s\n' 'CONFIG_TMPFS_XATTR=y'
+            printf '%s\n' 'CONFIG_LOCALVERSION_AUTO=n'
           } >> gki_defconfig
-
-      - name: Apply gaming tuning
-        if: ${{ github.event.inputs.enable_gaming_perf_tune == 'true' }}
-        working-directory: kernel_workspace/common
-        run: |
-          set -euo pipefail
-          patch_default() {
-            local label="$1" old_re="$2" new="$3"; shift 3
-            local files=("$@")
-            local d=$'\u0001'
-            for f in "${files[@]}"; do
-              [ -f "$f" ] || continue
-              if grep -qE -- "$old_re" "$f"; then
-                if sed -i -E "s${d}${old_re}${d}${new}${d}" "$f"; then
-                  echo "  [ok] ${label} (in $f)"
-                  return 0
-                fi
-              fi
-            done
-            echo "::warning::gaming-perf-tune: '${label}' skipped"
-            return 1
-          }
-          echo "CONFIG_MODULE_FORCE_LOAD=y" >> arch/arm64/configs/gki_defconfig
-          patch_default "vfs_cache_pressure 100->50" 'int[[:space:]]+sysctl_vfs_cache_pressure[[:space:]]+__read_mostly[[:space:]]*=[[:space:]]*100;' 'int sysctl_vfs_cache_pressure __read_mostly = 50;' fs/dcache.c || true
-          patch_default "freeze_timeout_msecs 20000->1000" '(unsigned[[:space:]]+int|int)[[:space:]]+(__read_mostly[[:space:]]+)?freeze_timeout_msecs[[:space:]]*=[[:space:]]*20[[:space:]]**[[:space:]]*MSEC_PER_SEC;' '\u0001 \u0002freeze_timeout_msecs = 1 * MSEC_PER_SEC;' kernel/power/process.c kernel/power/main.c kernel/power/suspend.c || true
-          patch_default "F2FS GC sleep 500->50" '#define[[:space:]]+DEF_GC_THREAD_URGENT_SLEEP_TIME[[:space:]]+500' '#define DEF_GC_THREAD_URGENT_SLEEP_TIME\t50' fs/f2fs/gc.h fs/f2fs/f2fs.h || true
-          patch_default "PME_TIMEOUT 1000->4000" '#define[[:space:]]+PME_TIMEOUT[[:space:]]+1000' '#define PME_TIMEOUT\t4000' drivers/pci/pci.c || true
-          patch_default "teo rating 19->25" '.rating[[:space:]]*=[[:space:]]*19,' '.rating =\t25,' drivers/cpuidle/governors/teo.c || true
-          echo "CONFIG_WERROR=n" >> arch/arm64/configs/gki_defconfig
 
       - name: Disable strict defconfig verification
         working-directory: kernel_workspace
@@ -470,7 +433,6 @@ jobs:
           export LLVM_IAS=1
           export KBUILD_BUILD_USER="${BUILD_USER}"
           export KBUILD_BUILD_HOST="${BUILD_HOST}"
-          export KBUILD_BUILD_TIMESTAMP="Mon Aug 31 00:00:00 UTC 2026"
           export KBUILD_BUILD_VERSION=1
           export LOCALVERSION=
           export CLANG_PREBUILT_BIN=neutron-clang/bin
@@ -478,21 +440,13 @@ jobs:
           NPROC="$(getconf _NPROCESSORS_ONLN || echo 2)"
           BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" build/build.sh -j"${NPROC}"
 
-      - name: Verify compile header
-        working-directory: kernel_workspace
-        run: |
-          set -euo pipefail
-          H=$(find out -path "*include/generated/compile.h" | head -n1)
-          [ -n "$H" ]
-          cat "$H"
-
       - name: Locate built Image
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          IMG=$(find out -path "*dist/Image" | head -n1)
+          IMG="$(find out -path "*dist/Image" | head -n1)"
           if [ -z "$IMG" ]; then
-            IMG=$(find out -name "Image" | head -n1)
+            IMG="$(find out -name "Image" | head -n1)"
           fi
           [ -n "$IMG" ]
           echo "IMG_PATH=kernel_workspace/${IMG}" >> "$GITHUB_ENV"
