@@ -1,22 +1,22 @@
-name: Build Android 12 GKI - Hybrid Neutron Clang
+name: Build Android 12 GKI Kernel
 
 "on":
   workflow_dispatch:
     inputs:
       os_patch_level:
-        description: "lts or exact GKI tag"
+        description: "Exact GKI tag or lts"
         required: true
         default: "android12-5.10.264_r00"
         type: string
 
       susfs_commit:
-        description: "Optional SUSFS commit hash"
+        description: "Optional SUSFS commit"
         required: false
         default: ""
         type: string
 
       device_name:
-        description: "Artifact/device label"
+        description: "Artifact name"
         required: false
         default: "gki-custom"
         type: string
@@ -27,13 +27,19 @@ name: Build Android 12 GKI - Hybrid Neutron Clang
         default: "latest"
         type: string
 
+      enable_extra_patches:
+        description: "Enable BBRv3/NTSync/Droidspaces experimental patches"
+        required: false
+        default: false
+        type: boolean
+
 permissions:
   contents: read
 
 env:
   VERSION: android12-5.10
-  TOOLCHAIN_DIR: /home/runner/toolchains/neutron-clang
-  CCACHE_DIR: /home/runner/.ccache
+  TOOLCHAIN_DIR: ${{ github.workspace }}/toolchains/neutron-clang
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
   build:
@@ -41,61 +47,62 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 240
 
-    container:
-      image: archlinux:latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          df -h
+
       - name: Install dependencies
-        shell: bash
         run: |
           set -euo pipefail
 
-          pacman -Sy --noconfirm archlinux-keyring
-          pacman -Syu --noconfirm
+          sudo apt-get update
 
-          pacman -S --noconfirm --needed \
-            base-devel \
-            clang \
-            llvm \
-            lld \
-            gcc \
-            git \
-            curl \
-            wget \
-            rsync \
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
             bc \
             bison \
-            flex \
-            openssl \
-            python \
-            ncurses \
+            build-essential \
+            clang \
             ccache \
-            zip \
-            unzip \
-            dtc \
-            patchelf \
-            file \
-            perl \
+            curl \
+            flex \
+            gcc-aarch64-linux-gnu \
+            git \
+            libelf-dev \
+            libncurses-dev \
+            libssl-dev \
+            lld \
+            llvm \
             pahole \
-            libxml2 \
-            python-setuptools \
-            inetutils
+            perl \
+            python3 \
+            python3-pip \
+            rsync \
+            unzip \
+            wget \
+            zip \
+            zstd
 
           command -v bash
           command -v git
           command -v curl
           command -v python3
           command -v clang
-          command -v clang++
           command -v ld.lld
-          command -v llvm-ar
-          command -v llvm-nm
+          command -v aarch64-linux-gnu-gcc
 
-      - name: Configure git
-        shell: bash
+      - name: Configure Git
         run: |
           set -euo pipefail
 
@@ -103,7 +110,6 @@ jobs:
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Install repo tool
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -119,7 +125,6 @@ jobs:
           "$HOME/bin/repo" --version
 
       - name: Prepare ccache
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -128,10 +133,8 @@ jobs:
           ccache --set-config=cache_dir="$CCACHE_DIR"
           ccache --set-config=max_size=5G
           ccache --zero-stats
-          ccache --version
 
       - name: Install Neutron Clang
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -164,8 +167,7 @@ jobs:
 
           echo "$TOOLCHAIN_DIR/bin" >> "$GITHUB_PATH"
 
-      - name: Verify Neutron toolchain
-        shell: bash
+      - name: Verify Neutron Clang
         run: |
           set -euo pipefail
 
@@ -175,12 +177,12 @@ jobs:
           "$TOOLCHAIN_BIN/clang++" --version
           "$TOOLCHAIN_BIN/ld.lld" --version
 
-          cat > /tmp/neutron-test.c <<'EOF'
+          cat > /tmp/clang-test.c <<'EOF'
           #include <stdio.h>
 
           int main(void)
           {
-              puts("neutron-clang-host-test-ok");
+              puts("neutron-clang-ok");
               return 0;
           }
           EOF
@@ -190,13 +192,12 @@ jobs:
             -fno-lto \
             -fno-pie \
             -no-pie \
-            /tmp/neutron-test.c \
-            -o /tmp/neutron-test
+            /tmp/clang-test.c \
+            -o /tmp/clang-test
 
-          /tmp/neutron-test
+          /tmp/clang-test
 
       - name: Resolve manifest
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -219,7 +220,6 @@ jobs:
           fi
 
       - name: Initialize kernel manifest
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -233,7 +233,6 @@ jobs:
 
       - name: Sync kernel sources
         working-directory: kernel_workspace
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -247,7 +246,6 @@ jobs:
       - name: Pin common kernel
         if: ${{ env.PIN_TYPE != '' }}
         working-directory: kernel_workspace/common
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -271,9 +269,8 @@ jobs:
               "refs/remotes/$REMOTE/$PIN_REF"
           fi
 
-      - name: Read kernel sublevel
+      - name: Read kernel version
         working-directory: kernel_workspace
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -284,11 +281,10 @@ jobs:
           test -n "$SUBLEVEL_VALUE"
 
           echo "SUBLEVEL=$SUBLEVEL_VALUE" >> "$GITHUB_ENV"
-          echo "Detected kernel sublevel: $SUBLEVEL_VALUE"
+          echo "Kernel sublevel: $SUBLEVEL_VALUE"
 
       - name: Clone SUSFS
         working-directory: kernel_workspace
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -311,7 +307,6 @@ jobs:
 
       - name: Configure SUSFS
         working-directory: kernel_workspace/common
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -335,7 +330,6 @@ jobs:
 
       - name: Copy SUSFS files
         working-directory: kernel_workspace/common
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -348,37 +342,8 @@ jobs:
 
           test -f 50_add_susfs_in_gki-android12-5.10.patch
 
-      - name: Prepare compatibility fixes
-        working-directory: kernel_workspace/common
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ "$SUBLEVEL" -le 43 ]; then
-            sed -i \
-              's/int[[:space:]]+this_len[[:space:]]*=[[:space:]]*min_t(size_t,/size_t this_len = min_t(size_t,/' \
-              fs/proc/base.c || true
-          fi
-
-          if [ "$SUBLEVEL" -le 117 ]; then
-            sed -i \
-              's/mask,[[:space:]]*mark->ignored_mask/inotify_mark_user_mask(mark)/g' \
-              fs/notify/fdinfo.c || true
-
-            sed -i \
-              's/ignored_mask:%x/ignored_mask:0/g' \
-              fs/notify/fdinfo.c || true
-          fi
-
-          if [ "$SUBLEVEL" -le 209 ]; then
-            sed -i \
-              's/goto show_pad;/return 0;/g' \
-              fs/proc/task_mmu.c || true
-          fi
-
       - name: Apply SUSFS patch
         working-directory: kernel_workspace/common
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -387,13 +352,11 @@ jobs:
           if git apply --check --whitespace=nowarn "$PATCH_FILE" 2>/dev/null; then
             git apply --whitespace=nowarn "$PATCH_FILE"
           else
-            echo "SUSFS patch is already applied or is not cleanly applicable."
-            echo "Continuing because SUSFS source files are already present."
+            echo "SUSFS patch already applied or incompatible with selected kernel."
           fi
 
       - name: Fix SUSFS nameidata
         working-directory: kernel_workspace/common
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -403,7 +366,6 @@ jobs:
 
       - name: Install KernelSU Next
         working-directory: kernel_workspace/common
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -415,7 +377,6 @@ jobs:
 
       - name: Apply KernelSU static patch
         working-directory: kernel_workspace/common/KernelSU-Next
-        shell: bash
         run: |
           set -euo pipefail
 
@@ -429,13 +390,39 @@ jobs:
             echo "KernelSU static patch already applied or skipped."
           fi
 
-      - name: Apply BBRv3
+      - name: Configure basic kernel features
         working-directory: kernel_workspace/common
-        shell: bash
         run: |
           set -euo pipefail
 
-          rm -rf /tmp/wildpatches
+          CONFIG="arch/arm64/configs/gki_defconfig"
+
+          cat >> "$CONFIG" <<'EOF'
+          CONFIG_TCP_CONG_ADVANCED=y
+          CONFIG_TCP_CONG_BBR=y
+          CONFIG_TCP_CONG_CUBIC=y
+          CONFIG_TCP_CONG_BIC=y
+          CONFIG_TCP_CONG_WESTWOOD=y
+          CONFIG_TCP_CONG_HTCP=y
+          CONFIG_DEFAULT_TCP_CONG=bbr
+          CONFIG_NET_SCH_FQ=y
+          CONFIG_NET_SCH_FQ_CODEL=y
+          CONFIG_NAMESPACES=y
+          CONFIG_NET_NS=y
+          CONFIG_CGROUPS=y
+          CONFIG_PID_NS=y
+          CONFIG_USER_NS=y
+          CONFIG_DEVTMPFS=y
+          CONFIG_TMPFS_POSIX_ACL=y
+          CONFIG_TMPFS_XATTR=y
+          CONFIG_NTSYNC=y
+          EOF
+
+      - name: Apply optional experimental patches
+        if: ${{ inputs.enable_extra_patches == true }}
+        working-directory: kernel_workspace/common
+        run: |
+          set -euo pipefail
 
           git clone \
             --depth=1 \
@@ -443,122 +430,155 @@ jobs:
             /tmp/wildpatches
 
           BBR_PATCH="/tmp/wildpatches/common/bbrv3/0001-net-tcp-backport-BBRv3-to-android12-5.10.patch"
-          BBR_NAME="bbr"
-          BBR_APPLIED="false"
 
-          if [ -f "$BBR_PATCH" ]; then
-            if git apply --check "$BBR_PATCH" 2>/dev/null; then
-              git apply "$BBR_PATCH"
-              BBR_APPLIED="true"
-            else
-              echo "BBRv3 patch already applied or skipped."
-            fi
-          fi
-
-          echo "BBR_NAME=$BBR_NAME" >> "$GITHUB_ENV"
-          echo "BBR_APPLIED=$BBR_APPLIED" >> "$GITHUB_ENV"
-
-      - name: Apply NTSync
-        working-directory: kernel_workspace/common
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ "$SUBLEVEL" -le 208 ]; then
-            curl -fsSL \
-              -o /tmp/ntsync-lockdep.patch \
-              https://raw.githubusercontent.com/WildKernels/GKI_KernelSU_SUSFS/main/.github/actions/ntsync/patches/0003-lockdep-assert-none-held.patch
-
-            if git apply --check /tmp/ntsync-lockdep.patch 2>/dev/null; then
-              git apply /tmp/ntsync-lockdep.patch
-            else
-              echo "NTSync lockdep patch already applied or skipped."
-            fi
+          if [ -f "$BBR_PATCH" ] && git apply --check "$BBR_PATCH" 2>/dev/null; then
+            git apply "$BBR_PATCH"
+            echo "CONFIG_TCP_CONG_BBR3=y" \
+              >> arch/arm64/configs/gki_defconfig
           fi
 
           curl -fsSL \
-            -o /tmp/ntsync-compat.patch \
+            -o /tmp/ntsync.patch \
             https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_compat_android12-5.10.patch
 
-          if git apply --check /tmp/ntsync-compat.patch 2>/dev/null; then
-            git apply /tmp/ntsync-compat.patch
-          else
-            echo "NTSync compatibility patch already applied or skipped."
+          if git apply --check /tmp/ntsync.patch 2>/dev/null; then
+            git apply /tmp/ntsync.patch
           fi
 
-          curl -fsSL \
-            -o /tmp/ntsync-base.patch \
-            https://raw.githubusercontent.com/WildKernels/kernel_patches/main/common/ntsync/ntsync_base.patch
-
-          if git apply --check /tmp/ntsync-base.patch 2>/dev/null; then
-            git apply /tmp/ntsync-base.patch
-          else
-            echo "NTSync base patch already applied or skipped."
-          fi
-
-      - name: Apply Droidspaces
+      - name: Set kernel brand
         working-directory: kernel_workspace/common
-        shell: bash
         run: |
           set -euo pipefail
 
-          DROIDSPACES_KABI_OK="true"
-
-          curl -fsSL \
-            -o /tmp/droidspaces-sysvipc.patch \
-            https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
-
-          if git apply --check /tmp/droidspaces-sysvipc.patch 2>/dev/null; then
-            git apply /tmp/droidspaces-sysvipc.patch
-          else
-            echo "Droidspaces SYSVIPC patch already applied or skipped."
+          if [ -f scripts/setlocalversion ]; then
+            cp scripts/setlocalversion scripts/setlocalversion.original
           fi
 
-          curl -fsSL \
-            -o /tmp/droidspaces-mqueue.patch \
-            https://raw.githubusercontent.com/ravindu644/Droidspaces-OSS/main/Documentation/resources/kernel-patches/GKI/below-kernel-6.12/002.5.10_or_lower_use_android_abi_padding_for_posix_mqueue.patch
+          cat > scripts/setlocalversion <<'EOF'
+          #!/bin/sh
+          printf -- '-BLAZE-KSUNv1-NeutronClang'
+          EOF
 
-          if git apply --check /tmp/droidspaces-mqueue.patch 2>/dev/null; then
-            git apply /tmp/droidspaces-mqueue.patch
-          else
-            echo "Droidspaces POSIX mqueue patch already applied or skipped."
-          fi
+          chmod +x scripts/setlocalversion
 
-          echo "DROIDSPACES_KABI_OK=$DROIDSPACES_KABI_OK" >> "$GITHUB_ENV"
+          echo 'CONFIG_LOCALVERSION="-NeutronClang"' \
+            >> arch/arm64/configs/gki_defconfig
 
-      - name: Configure kernel features
-        working-directory: kernel_workspace/common
-        shell: bash
+      - name: Disable check_defconfig
+        working-directory: kernel_workspace
         run: |
           set -euo pipefail
 
-          CONFIG="arch/arm64/configs/gki_defconfig"
+          test -f common/build.config.gki
+          sed -i 's/check_defconfig//g' common/build.config.gki
 
-          cat >> "$CONFIG" <<EOF
-          CONFIG_TCP_CONG_ADVANCED=y
-          CONFIG_TCP_CONG_BBR=y
-          CONFIG_TCP_CONG_CUBIC=y
-          CONFIG_TCP_CONG_BIC=y
-          CONFIG_TCP_CONG_WESTWOOD=y
-          CONFIG_TCP_CONG_HTCP=y
-          CONFIG_DEFAULT_TCP_CONG=$BBR_NAME
-          CONFIG_NET_SCH_FQ=y
-          CONFIG_NET_SCH_FQ_CODEL=y
-          CONFIG_NET_SCH_CAKE=y
-          CONFIG_NTSYNC=y
-          CONFIG_NAMESPACES=y
-          CONFIG_NET_NS=y
-          CONFIG_CGROUPS=y
-          CONFIG_PID_NS=y
-          CONFIG_USER_NS=y
-          CONFIG_DEVTMPFS=y
-          CONFIG_NETFILTER_XT_MATCH_ADDRTYPE=y
-          CONFIG_NETFILTER_XT_TARGET_REJECT=y
-          CONFIG_NETFILTER_XT_TARGET_LOG=y
-          CONFIG_NETFILTER_XT_MATCH_RECENT=y
-          CONFIG_IP_SET=y
-          CONFIG_IP_SET_HASH_IP=y
-          CONFIG_IP_SET_HASH_NET=y
-          CONFIG_NETFILTER_XT_SET=y
-          CONFIG_TMPFS_POSIX_ACL=y
-          CONFIG_TMPFS_XA
+      - name: Build kernel
+        working-directory: kernel_workspace
+        run: |
+          set -euxo pipefail
+
+          TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
+
+          export PATH="$TOOLCHAIN_BIN:$PATH"
+          export LLVM=1
+          export LLVM_IAS=1
+
+          export CC="$TOOLCHAIN_BIN/clang"
+          export CXX="$TOOLCHAIN_BIN/clang++"
+          export LD="$TOOLCHAIN_BIN/ld.lld"
+          export AR="$TOOLCHAIN_BIN/llvm-ar"
+          export NM="$TOOLCHAIN_BIN/llvm-nm"
+          export OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy"
+          export OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump"
+          export READELF="$TOOLCHAIN_BIN/llvm-readelf"
+          export STRIP="$TOOLCHAIN_BIN/llvm-strip"
+
+          export HOSTCC="$TOOLCHAIN_BIN/clang"
+          export HOSTCXX="$TOOLCHAIN_BIN/clang++"
+          export HOSTLD="$TOOLCHAIN_BIN/ld.lld"
+          export HOSTAR="$TOOLCHAIN_BIN/llvm-ar"
+          export HOSTNM="$TOOLCHAIN_BIN/llvm-nm"
+
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export USE_CCACHE=1
+          export CCACHE_DIR="$CCACHE_DIR"
+          export LTO=thin
+
+          rm -rf out
+          mkdir -p out
+
+          make -C common \
+            O="$PWD/out" \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            HOSTCC="$HOSTCC" \
+            HOSTCXX="$HOSTCXX" \
+            HOSTLD="$HOSTLD" \
+            HOSTAR="$HOSTAR" \
+            HOSTNM="$HOSTNM" \
+            HOSTCFLAGS="-O2 -fno-lto -fno-pie -no-pie" \
+            scripts/basic/fixdep
+
+          test -x out/scripts/basic/fixdep
+
+          BUILD_CONFIG=common/build.config.gki.aarch64 \
+          LTO=thin \
+          USE_CCACHE=1 \
+          CCACHE_DIR="$CCACHE_DIR" \
+          build/build.sh \
+            -j2 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            ARCH=arm64 \
+            CC="$CC" \
+            CXX="$CXX" \
+            LD="$LD" \
+            AR="$AR" \
+            NM="$NM" \
+            OBJCOPY="$OBJCOPY" \
+            OBJDUMP="$OBJDUMP" \
+            READELF="$READELF" \
+            STRIP="$STRIP" \
+            HOSTCC="$HOSTCC" \
+            HOSTCXX="$HOSTCXX" \
+            HOSTLD="$HOSTLD" \
+            HOSTAR="$HOSTAR" \
+            HOSTNM="$HOSTNM" \
+            CROSS_COMPILE="$CROSS_COMPILE" \
+            CLANG_TRIPLE="$CLANG_TRIPLE"
+
+      - name: Verify build configuration
+        working-directory: kernel_workspace
+        run: |
+          set -euo pipefail
+
+          CFG="$(find out -type f -name .config | head -n1)"
+
+          test -n "$CFG"
+          test -f "$CFG"
+
+          grep -q '^CONFIG_CC_IS_CLANG=y$' "$CFG"
+          grep -q '^CONFIG_CLANG_VERSION=' "$CFG"
+
+          grep -E \
+            'CONFIG_CC_IS_CLANG|CONFIG_CLANG_VERSION|CONFIG_LTO|CONFIG_KSU|CONFIG_NTSYNC' \
+            "$CFG" || true
+
+      - name: Verify kernel image
+        working-directory: kernel_workspace
+        run: |
+          set -euo pipefail
+
+          IMAGE="$(find out -type f -path '*/dist/Image' | head -n1 || true)"
+
+          if [ -z "$IMAGE" ]; then
+            IMAGE="$(find out -type f -name Image | head -n1 || true)"
+          fi
+
+          test -n "$IMAGE"
+          test -f "$IMAGE"
+
+          mkdir -p artifact-output
+          cp "$IMAGE" artifact-out
