@@ -192,9 +192,9 @@ jobs:
           echo "-NEUTRON" > .scmversion
           if [ -f scripts/setlocalversion ]; then
             cat > scripts/setlocalversion <<'EOF'
-#!/bin/sh
-printf -- '-NEUTRON'
-EOF
+           #!/bin/sh
+           printf -- '-NEUTRON'
+           EOF
             chmod +x scripts/setlocalversion
           fi
           if ! grep -q '^CONFIG_LOCALVERSION_AUTO=n' arch/arm64/configs/gki_defconfig; then
@@ -202,30 +202,30 @@ EOF
           fi
           if [ -f init/version.c ]; then
             perl -0pi -e 's/const char linux_banner[] =
-"Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
-LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION "\
-";/const char linux_banner[] =
-"Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
-LINUX_COMPILE_HOST ") (Neutron clang) " UTS_VERSION "\
-";/s' init/version.c || true
+          "Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
+           LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION "\
+           ";/const char linux_banner[] =
+           "Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
+           LINUX_COMPILE_HOST ") (Neutron clang) " UTS_VERSION "\
+           ";/s' init/version.c || true
             perl -0pi -e 's/const char linux_proc_banner[] =
-"%s version %s"
-" (" LINUX_COMPILE_BY "@" LINUX_COMPILE_HOST ")"
-" (" LINUX_COMPILER ") %s\
-";/const char linux_proc_banner[] =
-"%s version %s"
-" (" LINUX_COMPILE_BY "@" LINUX_COMPILE_HOST ")"
-" (Neutron clang) %s\
-";/s' init/version.c || true
+          "%s version %s"
+          " (" LINUX_COMPILE_BY "@" LINUX_COMPILE_HOST ")"
+          " (" LINUX_COMPILER ") %s\
+          ";/const char linux_proc_banner[] =
+          "%s version %s"
+          " (" LINUX_COMPILE_BY "@" LINUX_COMPILE_HOST ")"
+          " (Neutron clang) %s\
+          ";/s' init/version.c || true
           fi
           if [ -f init/version-timestamp.c ]; then
             perl -0pi -e 's/const char linux_banner[] =
-"Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
-LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION "\
-";/const char linux_banner[] =
-"Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
-LINUX_COMPILE_HOST ") (Neutron clang) " UTS_VERSION "\
-";/s' init/version-timestamp.c || true
+          "Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
+           LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION "\
+          ";/const char linux_banner[] =
+          "Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
+          LINUX_COMPILE_HOST ") (Neutron clang) " UTS_VERSION "\
+          ";/s' init/version-timestamp.c || true
           fi
 
       - name: Set SUSFS kernel configs
