@@ -117,6 +117,8 @@ jobs:
           export PATH="$TOOLCHAIN_BIN:$PATH"
           command -v clang
           clang --version
+          clang++ --version
+          ld.lld --version
           case "$(command -v clang)" in
             "$TOOLCHAIN_BIN"/*) : ;;
             *) echo "clang is not from Neutron"; exit 1 ;;
@@ -212,7 +214,7 @@ jobs:
           #!/bin/sh
           printf -- '-NEUTRON'
           EOF
-            chmod +x scripts/setlocalversion
+             chmod +x scripts/setlocalversion
           fi
           if ! grep -q '^CONFIG_LOCALVERSION_AUTO=n' arch/arm64/configs/gki_defconfig; then
             echo 'CONFIG_LOCALVERSION_AUTO=n' >> arch/arm64/configs/gki_defconfig
