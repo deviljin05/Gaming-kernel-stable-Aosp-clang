@@ -345,18 +345,19 @@ jobs:
           export STRIP="$TOOLCHAIN_BIN/llvm-strip"
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          # NOTE: HOSTCC/HOSTCXX/HOSTLD are intentionally left as the system
-          # gcc/g++/ld (NOT Neutron Clang). fixdep and other host-side tools
-          # are native x86_64 build helpers, not part of the kernel image —
-          # compiling them with this Neutron Clang release causes them to
-          # segfault immediately when run ("HOSTCC scripts/basic/fixdep" ->
-          # Segmentation fault). Using the system compiler for host tools and
-          # Neutron Clang only for the actual aarch64 kernel build avoids this.
+          # NOTE: HOSTCC/HOSTCXX/HOSTLD are intentionally the system
+          # gcc/g++/ld (NOT Neutron Clang), given as ABSOLUTE paths.
+          # fixdep and other host-side tools are native x86_64 build helpers,
+          # not part of the kernel image — compiling them with Neutron Clang
+          # causes them to segfault when run. Absolute paths are required
+          # because build.sh overrides PATH internally to only toolchain
+          # directories (no /usr/bin), so a bare "gcc"/"g++"/"ld" would not
+          # be found ("gcc: not found") even though they're installed.
           export BUILD_CONFIG=common/build.config.gki.aarch64
           export USE_CCACHE=1
           export CCACHE_DIR="$CCACHE_DIR"
           export LTO=thin
-          build/build.sh -j4 LLVM=1 CC="$TOOLCHAIN_BIN/clang" LD="$TOOLCHAIN_BIN/ld.lld" AR="$TOOLCHAIN_BIN/llvm-ar" NM="$TOOLCHAIN_BIN/llvm-nm" OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy" OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump" READELF="$TOOLCHAIN_BIN/llvm-readelf" STRIP="$TOOLCHAIN_BIN/llvm-strip" HOSTCC=gcc HOSTCXX=g++ HOSTLD=ld
+          build/build.sh -j4 LLVM=1 CC="$TOOLCHAIN_BIN/clang" LD="$TOOLCHAIN_BIN/ld.lld" AR="$TOOLCHAIN_BIN/llvm-ar" NM="$TOOLCHAIN_BIN/llvm-nm" OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy" OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump" READELF="$TOOLCHAIN_BIN/llvm-readelf" STRIP="$TOOLCHAIN_BIN/llvm-strip" HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld
 
       - name: Verify config
         working-directory: kernel_workspace
