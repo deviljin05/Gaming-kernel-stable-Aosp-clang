@@ -27,7 +27,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
 
     steps:
@@ -72,10 +72,15 @@ jobs:
           # because antman's glibc patch script pulls a pinned package filename
           # from a rolling-release Arch Linux mirror, which frequently 404s once
           # that package version is superseded upstream.
-          # This patch exists only to make the Clang binary run on hosts with an
-          # older/incompatible glibc (e.g. Ubuntu 20.04). Since this workflow runs
-          # on ubuntu-22.04, the host glibc is new enough already, so the patch
-          # is not needed here.
+          #
+          # This patch exists to make the Clang binary run on hosts whose glibc
+          # is OLDER than what the Neutron Clang build was linked against.
+          # ubuntu-22.04 ships glibc 2.35, which is too OLD for this Clang
+          # release (needs GLIBC_2.36 / GLIBC_2.38) -> "version GLIBC_2.36 not
+          # found" at runtime.
+          # ubuntu-24.04 ships glibc 2.39, which already satisfies that
+          # requirement, so the patch is unnecessary here and the flaky
+          # Arch-mirror download can be skipped entirely.
           test -x "$TOOLCHAIN_DIR/bin/clang"
           test -x "$TOOLCHAIN_DIR/bin/ld.lld"
 
