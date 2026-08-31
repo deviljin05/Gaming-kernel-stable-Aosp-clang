@@ -1,4 +1,4 @@
-name: Build GKI Kernel With Neutron Clang
+name: Build GKI Kernel Neutron Clang
 
 on:
   workflow_dispatch:
@@ -16,13 +16,13 @@ on:
         type: string
 
       device_name:
-        description: "Artifact name"
+        description: "Kernel artifact name"
         required: false
         default: "gki-neutron"
         type: string
 
       compiler_release:
-        description: "Neutron Clang release or latest"
+        description: "Neutron Clang release"
         required: false
         default: "latest"
         type: string
@@ -32,16 +32,17 @@ permissions:
 
 env:
   VERSION: android12-5.10
-  CCACHE_DIR: /home/runner/.ccache
   TOOLCHAIN_DIR: /home/runner/toolchains/neutron-clang
+  CCACHE_DIR: /home/runner/.ccache
 
 jobs:
   build:
-    name: Build Android 12 GKI With Neutron Clang
+    name: Build GKI With Neutron Clang
     runs-on: ubuntu-22.04
+    timeout-minutes: 240
+
     container:
       image: archlinux:latest
-    timeout-minutes: 240
 
     steps:
       - name: Checkout
@@ -50,7 +51,7 @@ jobs:
       - name: Install dependencies
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           pacman -Sy --noconfirm archlinux-keyring
           pacman -Syu --noconfirm
@@ -96,7 +97,7 @@ jobs:
       - name: Configure git
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
@@ -104,7 +105,7 @@ jobs:
       - name: Install repo tool
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           mkdir -p "$HOME/bin"
 
@@ -117,21 +118,20 @@ jobs:
 
           "$HOME/bin/repo" --version
 
-      - name: Configure ccache
+      - name: Prepare ccache
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           mkdir -p "$CCACHE_DIR"
           ccache --set-config=cache_dir="$CCACHE_DIR"
           ccache --set-config=max_size=5G
-          ccache --zero-stats
           ccache --version
 
-      - name: Download Neutron Clang
+      - name: Install Neutron Clang
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           mkdir -p "$TOOLCHAIN_DIR"
           cd "$TOOLCHAIN_DIR"
@@ -150,7 +150,6 @@ jobs:
             ./antman -S="$RELEASE"
           fi
 
-          # Required for host binaries such as fixdep.
           ./antman --patch=glibc
 
           test -x "$TOOLCHAIN_DIR/bin/clang"
@@ -168,7 +167,7 @@ jobs:
       - name: Verify Neutron Clang
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
 
@@ -199,7 +198,7 @@ jobs:
       - name: Resolve manifest
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           INPUT="${{ inputs.os_patch_level }}"
 
@@ -219,12 +218,10 @@ jobs:
             echo "PIN_REF=$INPUT" >> "$GITHUB_ENV"
           fi
 
-          cat "$GITHUB_ENV"
-
-      - name: Initialize Android kernel manifest
+      - name: Initialize kernel manifest
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           mkdir -p kernel_workspace
           cd kernel_workspace
@@ -234,11 +231,11 @@ jobs:
             -b "$MANIFEST_REF" \
             --depth=1
 
-      - name: Sync Android kernel
+      - name: Sync kernel
         working-directory: kernel_workspace
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           repo sync \
             -c \
@@ -247,12 +244,12 @@ jobs:
             --no-tags \
             -j2
 
-      - name: Pin common kernel
+      - name: Pin common repository
         if: ${{ env.PIN_TYPE != '' }}
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           REMOTE="$(git remote | head -n1)"
 
@@ -263,7 +260,6 @@ jobs:
               "refs/tags/$PIN_REF:refs/tags/$PIN_REF"
 
             git checkout "refs/tags/$PIN_REF"
-
           else
             git fetch \
               --depth=1 \
@@ -275,13 +271,11 @@ jobs:
               "refs/remotes/$REMOTE/$PIN_REF"
           fi
 
-          git status --short --branch
-
-      - name: Read kernel version
+      - name: Read kernel sublevel
         working-directory: kernel_workspace
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           SUBLEVEL_VALUE="$(
             awk -F '= ' '/^SUBLEVEL = / {print $2; exit}' common/Makefile
@@ -290,13 +284,12 @@ jobs:
           test -n "$SUBLEVEL_VALUE"
 
           echo "SUBLEVEL=$SUBLEVEL_VALUE" >> "$GITHUB_ENV"
-          echo "Kernel sublevel: $SUBLEVEL_VALUE"
 
       - name: Clone SUSFS
         working-directory: kernel_workspace
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           git clone \
             --depth=1 \
@@ -313,16 +306,16 @@ jobs:
             git checkout "$SUSFS_INPUT"
           fi
 
-          SUSFS_HASH="$(git rev-parse HEAD)"
-          echo "SUSFS_COMMIT=$SUSFS_HASH" >> "$GITHUB_ENV"
+          echo "SUSFS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Add SUSFS configuration
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           CONFIG="arch/arm64/configs/gki_defconfig"
+
           test -f "$CONFIG"
 
           cat >> "$CONFIG" <<'EOF'
@@ -343,7 +336,7 @@ jobs:
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           cp ../susfs4ksu/kernel_patches/fs/* ./fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
@@ -358,7 +351,7 @@ jobs:
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           patch \
             --batch \
@@ -371,7 +364,7 @@ jobs:
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           if [ -f fs/namei.c ]; then
             sed -i \
@@ -383,7 +376,7 @@ jobs:
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           curl -fsSL \
             https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh \
@@ -395,7 +388,7 @@ jobs:
         working-directory: kernel_workspace/common/KernelSU-Next
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           curl -fsSL \
             -o static.patch \
@@ -407,7 +400,7 @@ jobs:
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           rm -rf /tmp/wildpatches
 
@@ -446,7 +439,7 @@ jobs:
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           CONFIG="arch/arm64/configs/gki_defconfig"
 
@@ -471,7 +464,7 @@ jobs:
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           if [ "$SUBLEVEL" -le 208 ]; then
             curl -fsSL \
@@ -498,11 +491,11 @@ jobs:
 
           echo "CONFIG_NTSYNC=y" >> arch/arm64/configs/gki_defconfig
 
-      - name: Apply Droidspaces patches
+      - name: Apply Droidspaces
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           DROIDSPACES_OK="true"
 
@@ -528,7 +521,7 @@ jobs:
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           CONFIG="arch/arm64/configs/gki_defconfig"
 
@@ -559,14 +552,13 @@ jobs:
           CONFIG_TMPFS_XATTR=y
           EOF
 
-      - name: Set kernel local version
+      - name: Set kernel brand
         working-directory: kernel_workspace/common
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          if [ -f scripts/setlocalversion ] &&
-             [ ! -f scripts/setlocalversion.original ]; then
+          if [ -f scripts/setlocalversion ]; then
             cp scripts/setlocalversion scripts/setlocalversion.original
           fi
 
@@ -582,4 +574,19 @@ jobs:
 
       - name: Disable check_defconfig
         working-directory: kernel_workspace
-        shell: b
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f common/build.config.gki
+          sed -i 's/check_defconfig//g' common/build.config.gki
+
+      - name: Build kernel with Neutron Clang
+        working-directory: kernel_workspace
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
+
+          ex
