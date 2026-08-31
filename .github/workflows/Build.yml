@@ -322,14 +322,13 @@ jobs:
           export STRIP="$TOOLCHAIN_BIN/llvm-strip"
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          export HOSTCC="$TOOLCHAIN_BIN/clang"
-          export HOSTCXX="$TOOLCHAIN_BIN/clang++"
-          export HOSTLD="$TOOLCHAIN_BIN/ld.lld"
+          export HOSTCC=/usr/bin/gcc
+          export HOSTCXX=/usr/bin/g++
           export BUILD_CONFIG=common/build.config.gki.aarch64
           export USE_CCACHE=1
           export CCACHE_DIR="$CCACHE_DIR"
           export LTO=thin
-          build/build.sh -j4 LLVM=1 CC="$TOOLCHAIN_BIN/clang" LD="$TOOLCHAIN_BIN/ld.lld" AR="$TOOLCHAIN_BIN/llvm-ar" NM="$TOOLCHAIN_BIN/llvm-nm" OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy" OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump" READELF="$TOOLCHAIN_BIN/llvm-readelf" STRIP="$TOOLCHAIN_BIN/llvm-strip" HOSTCC="$TOOLCHAIN_BIN/clang" HOSTCXX="$TOOLCHAIN_BIN/clang++" HOSTLD="$TOOLCHAIN_BIN/ld.lld"
+          build/build.sh -j4 LLVM=1 CC="$TOOLCHAIN_BIN/clang" LD="$TOOLCHAIN_BIN/ld.lld" AR="$TOOLCHAIN_BIN/llvm-ar" NM="$TOOLCHAIN_BIN/llvm-nm" OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy" OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump" READELF="$TOOLCHAIN_BIN/llvm-readelf" STRIP="$TOOLCHAIN_BIN/llvm-strip" HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++
 
       - name: Verify config
         working-directory: kernel_workspace
