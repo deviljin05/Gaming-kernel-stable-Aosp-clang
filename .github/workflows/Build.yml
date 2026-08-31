@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       os_patch_level:
-        description: "Exact Android 12 5.10 tag"
+        description: "Exact Android 12 5.10 tag, branch, or lts"
         required: true
         default: "android12-5.10.264_r00"
         type: string
@@ -34,6 +34,7 @@ env:
   VERSION: android12-5.10
   NEUTRON_HOME: ${{ github.workspace }}/neutron-clang
   CCACHE_DIR: ${{ github.workspace }}/.ccache
+  KERNEL_WORKSPACE: ${{ github.workspace }}/kernel_workspace
 
 jobs:
   build:
@@ -140,7 +141,7 @@ jobs:
           fi
 
           if ! "$NEUTRON_HOME/bin/clang" --version >/dev/null 2>&1; then
-            echo "Neutron Clang needs glibc patching"
+            echo "Applying glibc patch for Neutron Clang"
             ./antman --patch=glibc
           fi
 
@@ -161,17 +162,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          export PATH="$TOOLCHAIN_BIN:$PATH"
-
           test -n "${TOOLCHAIN_BIN:-}"
-          test -x "$TOOLCHAIN_BIN/clang"
-          test -x "$TOOLCHAIN_BIN/clang++"
-          test -x "$TOOLCHAIN_BIN/ld.lld"
-
-          command -v clang
-          command -v clang++
-          command -v ld.lld
-
           "$TOOLCHAIN_BIN/clang" --version
           "$TOOLCHAIN_BIN/clang++" --version
           "$TOOLCHAIN_BIN/ld.lld" --version
@@ -192,7 +183,6 @@ jobs:
             -o "$RUNNER_TEMP/neutron-test"
 
           "$RUNNER_TEMP/neutron-test"
-
           echo "Neutron Clang verification successful."
 
       - name: Resolve manifest
@@ -217,24 +207,27 @@ jobs:
             echo "PIN_REF=$INPUT" >> "$GITHUB_ENV"
           fi
 
-          echo "Manifest: $MANIFEST_REF"
-          echo "Pin type: $PIN_TYPE"
-          echo "Pin ref: $PIN_REF"
+          echo "MANIFEST_REF=$MANIFEST_REF"
+          echo "PIN_TYPE=$PIN_TYPE"
+          echo "PIN_REF=$PIN_REF"
 
       - name: Initialize kernel source
         run: |
           set -euo pipefail
-          mkdir -p kernel_workspace
-          cd kernel_workspace
+
+          mkdir -p "$KERNEL_WORKSPACE"
+          cd "$KERNEL_WORKSPACE"
+
           repo init \
             -u https://android.googlesource.com/kernel/manifest \
             -b "$MANIFEST_REF" \
             --depth=1
 
       - name: Sync kernel source
-        working-directory: kernel_workspace
+        working-directory: ${{ env.KERNEL_WORKSPACE }}
         run: |
           set -euo pipefail
+
           repo sync \
             -c \
             --current-branch \
@@ -244,43 +237,37 @@ jobs:
 
       - name: Pin common kernel
         if: ${{ env.PIN_TYPE != 'none' }}
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
 
           REMOTE="$(git remote | head -n1)"
 
           if [ "$PIN_TYPE" = "tag" ]; then
-            git fetch \
-              --depth=1 \
-              "$REMOTE" \
-              "refs/tags/$PIN_REF:refs/tags/$PIN_REF"
+            git fetch --depth=1 "$REMOTE" "refs/tags/$PIN_REF:refs/tags/$PIN_REF"
             git checkout "refs/tags/$PIN_REF"
           else
-            git fetch \
-              --depth=1 \
-              "$REMOTE" \
-              "refs/heads/$PIN_REF:refs/remotes/$REMOTE/$PIN_REF"
-            git checkout -B \
-              "$PIN_REF" \
-              "refs/remotes/$REMOTE/$PIN_REF"
+            git fetch --depth=1 "$REMOTE" "refs/heads/$PIN_REF:refs/remotes/$REMOTE/$PIN_REF"
+            git checkout -B "$PIN_REF" "refs/remotes/$REMOTE/$PIN_REF"
           fi
 
           git describe --always --dirty
 
       - name: Read kernel sublevel
-        working-directory: kernel_workspace
+        working-directory: ${{ env.KERNEL_WORKSPACE }}
         run: |
           set -euo pipefail
+
           VALUE="$(
             awk -F '= ' '/^SUBLEVEL = / { print $2; exit }' common/Makefile
           )"
+
           test -n "$VALUE"
           echo "SUBLEVEL=$VALUE" >> "$GITHUB_ENV"
           echo "Kernel sublevel: $VALUE"
 
       - name: Clone SUSFS
-        working-directory: kernel_workspace
+        working-directory: ${{ env.KERNEL_WORKSPACE }}
         run: |
           set -euo pipefail
 
@@ -292,17 +279,14 @@ jobs:
 
           if [ -n "${{ inputs.susfs_commit }}" ]; then
             cd susfs4ksu
-            git fetch \
-              --depth=1 \
-              origin \
-              "${{ inputs.susfs_commit }}"
+            git fetch --depth=1 origin "${{ inputs.susfs_commit }}"
             git checkout "${{ inputs.susfs_commit }}"
           fi
 
           echo "SUSFS_COMMIT=$(git -C susfs4ksu rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Copy SUSFS files
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
           cp ../susfs4ksu/kernel_patches/fs/* fs/
@@ -311,7 +295,7 @@ jobs:
           test -f 50_add_susfs_in_gki-android12-5.10.patch
 
       - name: Apply SUSFS patch
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
           PATCH_FILE="50_add_susfs_in_gki-android12-5.10.patch"
@@ -322,7 +306,7 @@ jobs:
           fi
 
       - name: Install KernelSU Next
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
           curl -fsSL \
@@ -331,7 +315,7 @@ jobs:
           test -d KernelSU-Next
 
       - name: Apply KernelSU static patch
-        working-directory: kernel_workspace/common/KernelSU-Next
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common/KernelSU-Next
         run: |
           set -euo pipefail
           curl -fsSL \
@@ -344,37 +328,27 @@ jobs:
           fi
 
       - name: Apply SUSFS compatibility fixes
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
 
           if [ "$SUBLEVEL" -le 43 ]; then
-            sed -i \
-              's/int[[:space:]]+this_len[[:space:]]*=[[:space:]]*min_t(size_t,/size_t this_len = min_t(size_t,/' \
-              fs/proc/base.c || true
+            sed -i 's/int[[:space:]]+this_len[[:space:]]*=[[:space:]]*min_t(size_t,/size_t this_len = min_t(size_t,/' fs/proc/base.c || true
           fi
 
           if [ "$SUBLEVEL" -le 117 ]; then
-            sed -i \
-              's/mask,[[:space:]]*mark->ignored_mask/inotify_mark_user_mask(mark)/g' \
-              fs/notify/fdinfo.c || true
-            sed -i \
-              's/ignored_mask:%x/ignored_mask:0/g' \
-              fs/notify/fdinfo.c || true
+            sed -i 's/mask,[[:space:]]*mark->ignored_mask/inotify_mark_user_mask(mark)/g' fs/notify/fdinfo.c || true
+            sed -i 's/ignored_mask:%x/ignored_mask:0/g' fs/notify/fdinfo.c || true
           fi
 
           if [ "$SUBLEVEL" -le 209 ]; then
-            sed -i \
-              's/goto show_pad;/return 0;/g' \
-              fs/proc/task_mmu.c || true
+            sed -i 's/goto show_pad;/return 0;/g' fs/proc/task_mmu.c || true
           fi
 
-          sed -i \
-            's/set_nameidata(nd, old_dfd, fake_filename, NULL);/set_nameidata(nd, old_dfd, fake_filename);/g' \
-            fs/namei.c || true
+          sed -i 's/set_nameidata(nd, old_dfd, fake_filename, NULL);/set_nameidata(nd, old_dfd, fake_filename);/g' fs/namei.c || true
 
       - name: Apply BBRv3
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
 
@@ -400,11 +374,10 @@ jobs:
           echo "BBRV3_APPLIED=true" >> "$GITHUB_ENV"
 
       - name: Configure BBRv3
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
-          CONFIG="arch/arm64/configs/gki_defconfig"
-          cat >> "$CONFIG" <<'EOF'
+          cat >> arch/arm64/configs/gki_defconfig <<'EOF'
           CONFIG_TCP_CONG_ADVANCED=y
           CONFIG_TCP_CONG_BBR=y
           CONFIG_TCP_CONG_BBR3=y
@@ -419,7 +392,7 @@ jobs:
           EOF
 
       - name: Apply NTSync
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
 
@@ -456,13 +429,13 @@ jobs:
           fi
 
       - name: Configure NTSync
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
           echo "CONFIG_NTSYNC=y" >> arch/arm64/configs/gki_defconfig
 
       - name: Apply Droidspaces patches
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
 
@@ -489,11 +462,10 @@ jobs:
           git apply /tmp/droidspaces-mqueue.patch
 
       - name: Configure Droidspaces
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
-          CONFIG="arch/arm64/configs/gki_defconfig"
-          cat >> "$CONFIG" <<'EOF'
+          cat >> arch/arm64/configs/gki_defconfig <<'EOF'
           CONFIG_SYSVIPC=y
           CONFIG_POSIX_MQUEUE=y
           CONFIG_IPC_NS=y
@@ -516,13 +488,66 @@ jobs:
           EOF
 
       - name: Configure SUSFS
-        working-directory: kernel_workspace/common
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
         run: |
           set -euo pipefail
-          CONFIG="arch/arm64/configs/gki_defconfig"
-          cat >> "$CONFIG" <<'EOF'
+          cat >> arch/arm64/configs/gki_defconfig <<'EOF'
           CONFIG_KSU=y
           CONFIG_KSU_SUSFS=y
           CONFIG_KSU_SUSFS_SUS_PATH=y
           CONFIG_KSU_SUSFS_SUS_MOUNT=y
           EOF
+
+      - name: Build kernel
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
+        env:
+          PATH: ${{ env.TOOLCHAIN_BIN }}:${{ env.PATH }}
+        run: |
+          set -euo pipefail
+
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          export CC=clang
+          export LD=ld.lld
+          export AR=llvm-ar
+          export NM=llvm-nm
+          export OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump
+          export READELF=llvm-readelf
+          export STRIP=llvm-strip
+          export OBJSIZE=llvm-size
+          export KBUILD_BUILD_USER=github-actions
+          export KBUILD_BUILD_HOST=github-actions
+
+          mkdir -p out
+          make O=out gki_defconfig
+          make O=out -j"$(nproc)" Image.gz dtbo.img modules
+
+      - name: Package artifacts
+        working-directory: ${{ env.KERNEL_WORKSPACE }}/common
+        run: |
+          set -euo pipefail
+
+          mkdir -p "$RUNNER_TEMP/kernel-artifacts"
+
+          find out -type f ( \
+            -name "Image" -o \
+            -name "Image.gz" -o \
+            -name "*.ko" -o \
+            -name "*.dtbo" -o \
+            -name "*.img" \
+          ) -exec cp --parents {} "$RUNNER_TEMP/kernel-artifacts" ;
+
+          cp out/.config "$RUNNER_TEMP/kernel-artifacts/" || true
+          cp out/arch/arm64/boot/Image.gz "$RUNNER_TEMP/kernel-artifacts/" 2>/dev/null || true
+          cp out/arch/arm64/boot/dtbo.img "$RUNNER_TEMP/kernel-artifacts/" 2>/dev/null || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.device_name }}-android12-gki
+          path: ${{ runner.temp }}/kernel-artifacts
+          if-no-files-found: error
+          retention-days: 14
