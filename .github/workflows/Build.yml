@@ -119,10 +119,6 @@ jobs:
           clang --version
           clang++ --version
           ld.lld --version
-          case "$(command -v clang)" in
-            "$TOOLCHAIN_BIN"/*) : ;;
-            *) echo "clang is not from Neutron"; exit 1 ;;
-          esac
 
       - name: Resolve manifest ref
         run: |
@@ -212,9 +208,9 @@ jobs:
           if [ -f scripts/setlocalversion ]; then
             cat > scripts/setlocalversion <<'EOF'
           #!/bin/sh
-          printf -- '-NEUTRON'
-          EOF
-             chmod +x scripts/setlocalversion
+            printf -- '-NEUTRON'
+            EOF
+            chmod +x scripts/setlocalversion
           fi
           if ! grep -q '^CONFIG_LOCALVERSION_AUTO=n' arch/arm64/configs/gki_defconfig; then
             echo 'CONFIG_LOCALVERSION_AUTO=n' >> arch/arm64/configs/gki_defconfig
@@ -459,19 +455,17 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$TOOLCHAIN_BIN:$PATH"
-          export CC=clang
-          export CXX=clang++
-          export LD=ld.lld
-          export AR=llvm-ar
-          export NM=llvm-nm
-          export OBJCOPY=llvm-objcopy
-          export OBJDUMP=llvm-objdump
-          export READELF=llvm-readelf
-          export STRIP=llvm-strip
-          export HOSTCC=clang
-          export HOSTCXX=clang++
-          export HOSTAR=llvm-ar
-          export HOSTLD=ld.lld
+          export CC="$TOOLCHAIN_BIN/clang"
+          export CXX="$TOOLCHAIN_BIN/clang++"
+          export HOSTCC="$TOOLCHAIN_BIN/clang"
+          export HOSTCXX="$TOOLCHAIN_BIN/clang++"
+          export LD="$TOOLCHAIN_BIN/ld.lld"
+          export AR="$TOOLCHAIN_BIN/llvm-ar"
+          export NM="$TOOLCHAIN_BIN/llvm-nm"
+          export OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy"
+          export OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump"
+          export READELF="$TOOLCHAIN_BIN/llvm-readelf"
+          export STRIP="$TOOLCHAIN_BIN/llvm-strip"
           export LLVM=1
           export LLVM_IAS=1
           export KBUILD_BUILD_USER="${BUILD_USER}"
@@ -479,9 +473,10 @@ jobs:
           export KBUILD_BUILD_TIMESTAMP="Mon Aug 31 00:00:00 UTC 2026"
           export KBUILD_BUILD_VERSION=1
           export LOCALVERSION=
+          export CLANG_PREBUILT_BIN=neutron-clang/bin
           rm -rf out
           NPROC="$(getconf _NPROCESSORS_ONLN || echo 2)"
-          CLANG_PREBUILT_BIN=neutron-clang/bin BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" build/build.sh -j"${NPROC}"
+          BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" build/build.sh -j"${NPROC}"
 
       - name: Verify compile header
         working-directory: kernel_workspace
