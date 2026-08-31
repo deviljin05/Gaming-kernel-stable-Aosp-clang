@@ -437,8 +437,8 @@ jobs:
           export PATH="$TOOLCHAIN_BIN:$PATH"
           export CC="$TOOLCHAIN_BIN/clang"
           export CXX="$TOOLCHAIN_BIN/clang++"
-          export HOSTCC="$(command -v gcc)"
-          export HOSTCXX="$(command -v g++)"
+          export HOSTCC="$TOOLCHAIN_BIN/clang"
+          export HOSTCXX="$TOOLCHAIN_BIN/clang++"
           export LD="$TOOLCHAIN_BIN/ld.lld"
           export AR="$TOOLCHAIN_BIN/llvm-ar"
           export NM="$TOOLCHAIN_BIN/llvm-nm"
@@ -456,7 +456,7 @@ jobs:
           export LD_LIBRARY_PATH="${NEUTRON_HOME}/lib:${NEUTRON_HOME}/lib64:${LD_LIBRARY_PATH:-}"
           rm -rf out
           NPROC="$(getconf _NPROCESSORS_ONLN || echo 2)"
-          BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" build/build.sh -j"${NPROC}" HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX"
+          BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" build/build.sh -j"${NPROC}"
 
       - name: Locate built Image
         working-directory: kernel_workspace
