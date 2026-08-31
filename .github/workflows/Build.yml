@@ -1,4 +1,4 @@
-name: Build Custom GKI Kernel (Neutron Clang + SUSFS + BBRv3)
+name: Build Custom GKI Kernel (Official AOSP Clang + SUSFS + BBRv3)
 
 on:
   workflow_dispatch:
@@ -18,10 +18,10 @@ on:
         required: false
         default: "gki-custom"
         type: string
-      compiler_release:
-        description: "Neutron release tag or latest"
+      clang_version:
+        description: "Override AOSP clang version (e.g. r487747c). Leave empty to auto-detect from the kernel's own build.config.constants"
         required: false
-        default: "latest"
+        default: ""
         type: string
       enable_gaming_perf_tune:
         description: "Enable gaming/latency perf tweaks"
@@ -40,10 +40,8 @@ permissions:
 env:
   VERSION: android12-5.10
   CCACHE_DIR: /home/runner/.ccache
-  NEUTRON_HOME: ${{ github.workspace }}/kernel_workspace/neutron-clang
-  TOOLCHAIN_BIN: ${{ github.workspace }}/kernel_workspace/neutron-clang/bin
-  BUILD_USER: Neutron
-  BUILD_HOST: clang
+  BUILD_USER: builder
+  BUILD_HOST: ci
 
 jobs:
   build:
@@ -88,71 +86,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$CCACHE_DIR"
-
-      - name: Download Neutron Clang
-        run: |
-          set -euo pipefail
-          rm -rf "$NEUTRON_HOME"
-          mkdir -p "$NEUTRON_HOME"
-          cd "$NEUTRON_HOME"
-          curl -fsSL https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman -o antman
-          chmod +x antman
-          RELEASE="${{ inputs.compiler_release }}"
-          if [ -z "${RELEASE}" ] || [ "${RELEASE}" = "latest" ]; then
-            ./antman -S
-          else
-            ./antman -S="${RELEASE}"
-          fi
-          if ! "$TOOLCHAIN_BIN/clang" --version >/dev/null 2>&1; then
-            ./antman --patch=glibc
-          fi
-          cd "$TOOLCHAIN_BIN"
-          if [ ! -x clang ]; then
-            CLANG_BIN="$(find . -maxdepth 1 -type f -name 'clang-*' ! -name '*++*' -perm -u+x | sort -V | tail -n1 | sed 's#^\./##')"
-            [ -n "${CLANG_BIN}" ] && ln -sf "${CLANG_BIN}" clang
-          fi
-          if [ ! -x clang++ ]; then
-            CLANGPP_BIN="$(find . -maxdepth 1 -type f -name 'clang++-*' -perm -u+x | sort -V | tail -n1 | sed 's#^\./##')"
-            if [ -n "${CLANGPP_BIN}" ]; then
-              ln -sf "${CLANGPP_BIN}" clang++
-            elif [ -x clang ]; then
-              ln -sf clang clang++
-            fi
-          fi
-          if [ ! -x ld.lld ] && [ -x lld ]; then
-            ln -sf lld ld.lld
-          fi
-          cd "$NEUTRON_HOME"
-          test -x "$TOOLCHAIN_BIN/clang"
-          test -x "$TOOLCHAIN_BIN/clang++"
-          test -x "$TOOLCHAIN_BIN/ld.lld"
-          echo "$TOOLCHAIN_BIN" >> "$GITHUB_PATH"
-
-      - name: Verify Neutron clang
-        run: |
-          set -euo pipefail
-          export PATH="$TOOLCHAIN_BIN:$PATH"
-          command -v clang
-          clang --version
-          clang++ --version
-          ld.lld --version
-
-      - name: Smoke test Neutron clang toolchain
-        run: |
-          set -euo pipefail
-          export PATH="$TOOLCHAIN_BIN:$PATH"
-          TMP_DIR="$(mktemp -d)"
-          printf '%s\n' 'int main(void) { return 0; }' > "$TMP_DIR/smoke.c"
-          if ! clang --rtlib=compiler-rt -O2 -o "$TMP_DIR/smoke" "$TMP_DIR/smoke.c"; then
-            echo "::error::Neutron Clang failed to compile a trivial host program with --rtlib=compiler-rt. This toolchain build (tag: ${{ inputs.compiler_release }}) is broken for host compilation on this runner. Re-run the workflow with a different/older 'compiler_release' input (check https://github.com/Neutron-Toolchains/clang-build-catalogue/releases for a known-good tag) instead of 'latest'."
-            exit 1
-          fi
-          if ! "$TMP_DIR/smoke"; then
-            echo "::error::Neutron Clang produced a binary that crashes (segfault) on this runner. This toolchain build (tag: ${{ inputs.compiler_release }}) is incompatible with this environment. Re-run the workflow with a different/older 'compiler_release' input (check https://github.com/Neutron-Toolchains/clang-build-catalogue/releases for a known-good tag) instead of 'latest'."
-            exit 1
-          fi
-          rm -rf "$TMP_DIR"
-          echo "Neutron Clang toolchain smoke test passed."
 
       - name: Resolve manifest ref
         run: |
@@ -209,6 +142,69 @@ jobs:
           SUBLEVEL="$(grep -m1 '^SUBLEVEL = ' common/Makefile | awk '{print $3}')"
           echo "SUBLEVEL=${SUBLEVEL}" >> "$GITHUB_ENV"
 
+      - name: Fetch official AOSP Clang toolchain
+        working-directory: kernel_workspace
+        run: |
+          set -euo pipefail
+          OVERRIDE_VER="${{ github.event.inputs.clang_version }}"
+          if [ -n "${OVERRIDE_VER}" ]; then
+            CLANG_VER="${OVERRIDE_VER#clang-}"
+          else
+            CLANG_VER="$(grep -m1 '^CLANG_VERSION' common/build.config.constants | cut -d= -f2 | sed 's/^clang-//')"
+          fi
+          if [ -z "${CLANG_VER}" ]; then
+            echo "::error::Could not determine CLANG_VERSION from common/build.config.constants. Pass it explicitly via the clang_version input (e.g. r487747c)."
+            exit 1
+          fi
+          CLANG_VERSION="clang-${CLANG_VER}"
+          echo "Resolved CLANG_VERSION=${CLANG_VERSION}"
+
+          REPO_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86"
+          CANDIDATE_BRANCHES=(
+            "${VERSION}"
+            "master-kernel-build-2026"
+            "master-kernel-build-2025"
+            "master-kernel-build-2024"
+            "master-kernel-build-2023"
+            "master-kernel-build-2022"
+            "master-kernel-build-2021"
+            "${MANIFEST_REF}"
+          )
+          ARCHIVE_BRANCH=""
+          for CANDIDATE in "${CANDIDATE_BRANCHES[@]}"; do
+            if git ls-remote --exit-code --heads "${REPO_URL}" "refs/heads/${CANDIDATE}" >/dev/null 2>&1; then
+              ARCHIVE_BRANCH="${CANDIDATE}"
+              break
+            fi
+          done
+          if [ -z "${ARCHIVE_BRANCH}" ]; then
+            echo "::error::Could not find a matching branch in the AOSP clang prebuilts repo. Check https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+refs manually."
+            exit 1
+          fi
+          echo "Using prebuilts branch: ${ARCHIVE_BRANCH}"
+
+          CLANG_DIR="prebuilts/clang/host/linux-x86/${CLANG_VERSION}"
+          mkdir -p "${CLANG_DIR}"
+          curl -fsSL "${REPO_URL}/+archive/refs/heads/${ARCHIVE_BRANCH}/${CLANG_VERSION}.tar.gz" -o /tmp/clang.tar.gz
+          tar -xzf /tmp/clang.tar.gz -C "${CLANG_DIR}"
+          rm -f /tmp/clang.tar.gz
+
+          TOOLCHAIN_BIN="${{ github.workspace }}/kernel_workspace/${CLANG_DIR}/bin"
+          test -x "${TOOLCHAIN_BIN}/clang"
+          test -x "${TOOLCHAIN_BIN}/clang++"
+          test -x "${TOOLCHAIN_BIN}/ld.lld"
+          echo "CLANG_VERSION=${CLANG_VERSION}" >> "$GITHUB_ENV"
+          echo "TOOLCHAIN_BIN=${TOOLCHAIN_BIN}" >> "$GITHUB_ENV"
+          echo "${TOOLCHAIN_BIN}" >> "$GITHUB_PATH"
+
+      - name: Verify Clang toolchain
+        run: |
+          set -euo pipefail
+          command -v clang
+          clang --version
+          clang++ --version
+          ld.lld --version
+
       - name: Clone SUSFS4KSU
         working-directory: kernel_workspace
         run: |
@@ -220,37 +216,23 @@ jobs:
           fi
           echo "SUSFS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Force build config to Neutron clang
-        working-directory: kernel_workspace/common
-        run: |
-          set -euo pipefail
-          for f in build.config.common build.config.gki build.config.gki.aarch64; do
-            [ -f "$f" ] || continue
-            if grep -q '^CLANG_PREBUILT_BIN=' "$f"; then
-              sed -i 's#^CLANG_PREBUILT_BIN=.*#CLANG_PREBUILT_BIN=neutron-clang/bin#' "$f"
-            else
-              printf '%s\n' 'CLANG_PREBUILT_BIN=neutron-clang/bin' >> "$f"
-            fi
-          done
-          grep -q '^LLVM=1' build.config.common 2>/dev/null || printf '%s\n' 'LLVM=1' >> build.config.common
-
       - name: Force local version control
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
-          printf '%s\n' '-NEUTRON' > .scmversion
+          printf '%s\n' '-CUSTOM' > .scmversion
           if [ -f scripts/setlocalversion ]; then
             cat > scripts/setlocalversion <<'EOF'
           #!/bin/sh
-          printf '%s' '-NEUTRON'
+          printf '%s' '-CUSTOM'
           EOF
             chmod +x scripts/setlocalversion
           fi
           if ! grep -q '^CONFIG_LOCALVERSION_AUTO=n' arch/arm64/configs/gki_defconfig; then
             printf '%s\n' 'CONFIG_LOCALVERSION_AUTO=n' >> arch/arm64/configs/gki_defconfig
           fi
-          if ! grep -q '^CONFIG_LOCALVERSION="-NEUTRON"' arch/arm64/configs/gki_defconfig; then
-            printf '%s\n' 'CONFIG_LOCALVERSION="-NEUTRON"' >> arch/arm64/configs/gki_defconfig
+          if ! grep -q '^CONFIG_LOCALVERSION="-CUSTOM"' arch/arm64/configs/gki_defconfig; then
+            printf '%s\n' 'CONFIG_LOCALVERSION="-CUSTOM"' >> arch/arm64/configs/gki_defconfig
           fi
 
       - name: Set SUSFS configs
@@ -451,25 +433,25 @@ jobs:
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          export PATH="$TOOLCHAIN_BIN:$PATH"
-          export CC="$TOOLCHAIN_BIN/clang"
-          export CXX="$TOOLCHAIN_BIN/clang++"
-          export HOSTCC="$TOOLCHAIN_BIN/clang"
-          export HOSTCXX="$TOOLCHAIN_BIN/clang++"
-          export LD="$TOOLCHAIN_BIN/ld.lld"
-          export AR="$TOOLCHAIN_BIN/llvm-ar"
-          export NM="$TOOLCHAIN_BIN/llvm-nm"
-          export OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy"
-          export OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump"
-          export READELF="$TOOLCHAIN_BIN/llvm-readelf"
-          export STRIP="$TOOLCHAIN_BIN/llvm-strip"
+          export PATH="${TOOLCHAIN_BIN}:$PATH"
+          export CC="${TOOLCHAIN_BIN}/clang"
+          export CXX="${TOOLCHAIN_BIN}/clang++"
+          export HOSTCC="${TOOLCHAIN_BIN}/clang"
+          export HOSTCXX="${TOOLCHAIN_BIN}/clang++"
+          export LD="${TOOLCHAIN_BIN}/ld.lld"
+          export AR="${TOOLCHAIN_BIN}/llvm-ar"
+          export NM="${TOOLCHAIN_BIN}/llvm-nm"
+          export OBJCOPY="${TOOLCHAIN_BIN}/llvm-objcopy"
+          export OBJDUMP="${TOOLCHAIN_BIN}/llvm-objdump"
+          export READELF="${TOOLCHAIN_BIN}/llvm-readelf"
+          export STRIP="${TOOLCHAIN_BIN}/llvm-strip"
           export LLVM=1
           export LLVM_IAS=1
           export KBUILD_BUILD_USER="${BUILD_USER}"
           export KBUILD_BUILD_HOST="${BUILD_HOST}"
           export KBUILD_BUILD_VERSION=1
           export LOCALVERSION=
-          export CLANG_PREBUILT_BIN=neutron-clang/bin
+          export CLANG_PREBUILT_BIN="prebuilts/clang/host/linux-x86/${CLANG_VERSION}/bin"
           rm -rf out
           NPROC="$(getconf _NPROCESSORS_ONLN || echo 2)"
           BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" build/build.sh -j"${NPROC}"
@@ -491,7 +473,7 @@ jobs:
           git clone --depth=1 https://github.com/WildKernels/AnyKernel3.git -b gki-2.0 ak3
           cp "${{ env.IMG_PATH }}" ak3/Image
           cd ak3
-          zip -r9 -q "../${{ github.event.inputs.device_name }}-Neutron-android12-5.10-susfs${SUSFS_COMMIT:0:8}.zip" . -x ".git*"
+          zip -r9 -q "../${{ github.event.inputs.device_name }}-AOSPClang-android12-5.10-susfs${SUSFS_COMMIT:0:8}.zip" . -x ".git*"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
