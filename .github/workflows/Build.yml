@@ -332,32 +332,31 @@ jobs:
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          TOOLCHAIN_BIN="$TOOLCHAIN_DIR/bin"
-          export PATH="$TOOLCHAIN_BIN:$PATH"
-          export LLVM=1
-          export CC="$TOOLCHAIN_BIN/clang"
-          export LD="$TOOLCHAIN_BIN/ld.lld"
-          export AR="$TOOLCHAIN_BIN/llvm-ar"
-          export NM="$TOOLCHAIN_BIN/llvm-nm"
-          export OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy"
-          export OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump"
-          export READELF="$TOOLCHAIN_BIN/llvm-readelf"
-          export STRIP="$TOOLCHAIN_BIN/llvm-strip"
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CLANG_TRIPLE=aarch64-linux-gnu-
-          # NOTE: HOSTCC/HOSTCXX/HOSTLD are intentionally the system
-          # gcc/g++/ld (NOT Neutron Clang), given as ABSOLUTE paths.
-          # fixdep and other host-side tools are native x86_64 build helpers,
-          # not part of the kernel image — compiling them with Neutron Clang
-          # causes them to segfault when run. Absolute paths are required
-          # because build.sh overrides PATH internally to only toolchain
-          # directories (no /usr/bin), so a bare "gcc"/"g++"/"ld" would not
-          # be found ("gcc: not found") even though they're installed.
-          export BUILD_CONFIG=common/build.config.gki.aarch64
+          # NOTE: We intentionally do NOT force CC/LD/AR/HOSTCC/etc. to the
+          # Neutron Clang toolchain here.
+          #
+          # Background: kernel's own Makefile, when LLVM=1 is passed, forces
+          # HOSTCFLAGS/HOSTLDFLAGS to include clang-only flags
+          # (--rtlib=compiler-rt, -fuse-ld=lld) regardless of what HOSTCC is
+          # set to. That breaks gcc as a HOSTCC ("unrecognized command-line
+          # option '--rtlib=compiler-rt'"). Using Neutron Clang itself as
+          # HOSTCC compiles fine, but the resulting host tool binary
+          # (scripts/basic/fixdep) segfaults the instant it's run — this
+          # happens consistently on both ubuntu-22.04 and ubuntu-24.04, so
+          # it's specific to this Neutron Clang build/patch combination, not
+          # the runner.
+          #
+          # The repo sync step already fetched Google's own AOSP prebuilt
+          # Clang (visible in the build log's PATH as
+          # prebuilts-master/clang/host/linux-x86/clang-<rev>/bin) along with
+          # matching prebuilt binutils. That toolchain is exactly what Google
+          # tests this kernel source against on CI, so we let build.sh use it
+          # by default instead of forcing Neutron Clang. This avoids the
+          # segfault and the flag-mismatch problem entirely.
           export USE_CCACHE=1
           export CCACHE_DIR="$CCACHE_DIR"
-          export LTO=thin
-          build/build.sh -j4 LLVM=1 CC="$TOOLCHAIN_BIN/clang" LD="$TOOLCHAIN_BIN/ld.lld" AR="$TOOLCHAIN_BIN/llvm-ar" NM="$TOOLCHAIN_BIN/llvm-nm" OBJCOPY="$TOOLCHAIN_BIN/llvm-objcopy" OBJDUMP="$TOOLCHAIN_BIN/llvm-objdump" READELF="$TOOLCHAIN_BIN/llvm-readelf" STRIP="$TOOLCHAIN_BIN/llvm-strip" HOSTCC=/usr/bin/gcc HOSTCXX=/usr/bin/g++ HOSTLD=/usr/bin/ld
+          export BUILD_CONFIG=common/build.config.gki.aarch64
+          build/build.sh -j4
 
       - name: Verify config
         working-directory: kernel_workspace
