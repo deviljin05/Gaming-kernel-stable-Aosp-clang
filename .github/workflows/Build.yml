@@ -27,7 +27,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 180
 
     steps:
@@ -67,20 +67,32 @@ jobs:
           curl -fsSL -o antman https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman
           chmod +x antman
           ./antman -S="${{ github.event.inputs.compiler_release }}"
-          # NOTE: --patch=glibc removed on purpose.
-          # It was failing with "wget ... Error: Process completed with exit code 8"
-          # because antman's glibc patch script pulls a pinned package filename
-          # from a rolling-release Arch Linux mirror, which frequently 404s once
-          # that package version is superseded upstream.
+          # NOTE on --patch=glibc:
+          # This Neutron Clang release needs GLIBC_2.36 / GLIBC_2.38, which is
+          # newer than what ubuntu-22.04 ships (2.35). Without this patch,
+          # clang fails immediately with "version GLIBC_2.36 not found".
+          # ubuntu-24.04 (glibc 2.39) was tried instead of patching, but that
+          # broke the build differently: HOSTCC-compiled tools (fixdep)
+          # segfaulted, meaning this Clang release isn't fully compatible with
+          # 24.04 either. So we stay on ubuntu-22.04 and patch clang instead.
           #
-          # This patch exists to make the Clang binary run on hosts whose glibc
-          # is OLDER than what the Neutron Clang build was linked against.
-          # ubuntu-22.04 ships glibc 2.35, which is too OLD for this Clang
-          # release (needs GLIBC_2.36 / GLIBC_2.38) -> "version GLIBC_2.36 not
-          # found" at runtime.
-          # ubuntu-24.04 ships glibc 2.39, which already satisfies that
-          # requirement, so the patch is unnecessary here and the flaky
-          # Arch-mirror download can be skipped entirely.
+          # The patch step itself downloads a couple of files from a
+          # rolling-release Arch Linux mirror, which occasionally 404s when
+          # the mirror rotates package versions (wget exit code 8). That is
+          # usually transient, so retry a few times before giving up.
+          PATCH_OK="false"
+          for attempt in 1 2 3 4 5; do
+            if ./antman --patch=glibc; then
+              PATCH_OK="true"
+              break
+            fi
+            echo "glibc patch attempt $attempt failed, retrying in 15s..."
+            sleep 15
+          done
+          if [ "$PATCH_OK" != "true" ]; then
+            echo "antman --patch=glibc failed after multiple attempts"
+            exit 1
+          fi
           test -x "$TOOLCHAIN_DIR/bin/clang"
           test -x "$TOOLCHAIN_DIR/bin/ld.lld"
 
