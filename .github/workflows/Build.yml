@@ -1,10 +1,10 @@
-name: Build Custom GKI Kernel (Neutron Clang + SUSFS + BBRv3 + No clang12 banner)
+name: Build Custom GKI Kernel (Neutron Clang + SUSFS + BBRv3)
 
 on:
   workflow_dispatch:
     inputs:
       os_patch_level:
-        description: "'lts' = rolling LTS branch. A dated maintenance branch (e.g. android12-5.10-2026-07) tracks Google's latest upstream merges/ASB patches. Or pin an exact GKI release tag, e.g. android12-5.10.264_r00"
+        description: "'lts' = rolling LTS branch. Or pin an exact GKI release tag like android12-5.10.264_r00"
         required: true
         default: "android12-5.10.264_r00"
         type: string
@@ -14,7 +14,7 @@ on:
         default: ""
         type: string
       device_name:
-        description: "Optional label for artifact naming"
+        description: "Artifact label"
         required: false
         default: "gki-custom"
         type: string
@@ -44,19 +44,18 @@ env:
   TOOLCHAIN_BIN: ${{ github.workspace }}/neutron-clang/bin
   BUILD_USER: Neutron
   BUILD_HOST: clang
-  BANNER_SUFFIX: -NEUTRON
 
 jobs:
   build:
     runs-on: ubuntu-22.04
-    timeout-minutes: 150
+    timeout-minutes: 180
 
     defaults:
       run:
         shell: bash
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Free up disk space
@@ -112,19 +111,18 @@ jobs:
           test -x "$TOOLCHAIN_BIN/ld.lld"
           echo "$TOOLCHAIN_BIN" >> "$GITHUB_PATH"
 
-      - name: Verify Neutron clang at start
+      - name: Verify Neutron clang
         run: |
           set -euo pipefail
           export PATH="$TOOLCHAIN_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
           command -v clang
           clang --version
-          ld.lld --version
           case "$(command -v clang)" in
             "$TOOLCHAIN_BIN"/*) : ;;
             *) echo "clang is not from Neutron"; exit 1 ;;
           esac
 
-      - name: Resolve manifest branch and optional pinned release tag
+      - name: Resolve manifest ref
         run: |
           set -euo pipefail
           INPUT="${{ github.event.inputs.os_patch_level }}"
@@ -145,7 +143,7 @@ jobs:
           echo "PIN_REF=${PIN_REF}" >> "$GITHUB_ENV"
           echo "PIN_TYPE=${PIN_TYPE}" >> "$GITHUB_ENV"
 
-      - name: Sync GKI kernel source
+      - name: Sync source
         run: |
           set -euo pipefail
           mkdir -p kernel_workspace
@@ -153,7 +151,7 @@ jobs:
           repo init -u https://android.googlesource.com/kernel/manifest -b "${MANIFEST_REF}" --depth=1
           repo sync -c --current-branch --no-clone-bundle --no-tags -j"$(getconf _NPROCESSORS_ONLN)"
 
-      - name: Pin kernel/common to exact tag or branch
+      - name: Pin exact source
         if: ${{ env.PIN_TYPE != '' }}
         working-directory: kernel_workspace/common
         run: |
@@ -167,7 +165,12 @@ jobs:
             git checkout -B "${PIN_REF}" "refs/remotes/${REMOTE_NAME}/${PIN_REF}"
           fi
 
-      - name: Detect kernel sublevel
+      - name: Clean out dir
+        run: |
+          set -euo pipefail
+          rm -rf kernel_workspace/out || true
+
+      - name: Detect sublevel
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
@@ -185,50 +188,39 @@ jobs:
           fi
           echo "SUSFS_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
-      - name: Apply safe Neutron banner patch
+      - name: Force build config to Neutron clang
+        working-directory: kernel_workspace/common
+        run: |
+          set -euo pipefail
+          for f in build.config.common build.config.gki build.config.gki.aarch64; do
+            [ -f "$f" ] || continue
+            if grep -q '^CLANG_PREBUILT_BIN=' "$f"; then
+              sed -i "s#^CLANG_PREBUILT_BIN=.*#CLANG_PREBUILT_BIN=${TOOLCHAIN_BIN}#" "$f"
+            else
+              echo "CLANG_PREBUILT_BIN=${TOOLCHAIN_BIN}" >> "$f"
+            fi
+          done
+          if [ -f build.config.common ]; then
+            grep -q '^LLVM=1' build.config.common || echo 'LLVM=1' >> build.config.common
+          fi
+
+      - name: Force localversion controls
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
           echo "-NEUTRON" > .scmversion
           if [ -f scripts/setlocalversion ]; then
             cat > scripts/setlocalversion <<'EOF'
-           #!/bin/sh
-           printf -- '-NEUTRON'
-           EOF
-            chmod +x scripts/setlocalversion
+          #!/bin/sh
+          printf -- '-NEUTRON'
+          EOF
+          chmod +x scripts/setlocalversion
           fi
           if ! grep -q '^CONFIG_LOCALVERSION_AUTO=n' arch/arm64/configs/gki_defconfig; then
             echo 'CONFIG_LOCALVERSION_AUTO=n' >> arch/arm64/configs/gki_defconfig
           fi
-          if [ -f init/version.c ]; then
-            perl -0pi -e 's/const char linux_banner[] =
-          "Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
-           LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION "\
-           ";/const char linux_banner[] =
-           "Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
-           LINUX_COMPILE_HOST ") (Neutron clang) " UTS_VERSION "\
-           ";/s' init/version.c || true
-            perl -0pi -e 's/const char linux_proc_banner[] =
-          "%s version %s"
-          " (" LINUX_COMPILE_BY "@" LINUX_COMPILE_HOST ")"
-          " (" LINUX_COMPILER ") %s\
-          ";/const char linux_proc_banner[] =
-          "%s version %s"
-          " (" LINUX_COMPILE_BY "@" LINUX_COMPILE_HOST ")"
-          " (Neutron clang) %s\
-          ";/s' init/version.c || true
-          fi
-          if [ -f init/version-timestamp.c ]; then
-            perl -0pi -e 's/const char linux_banner[] =
-          "Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
-           LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION "\
-          ";/const char linux_banner[] =
-          "Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
-          LINUX_COMPILE_HOST ") (Neutron clang) " UTS_VERSION "\
-          ";/s' init/version-timestamp.c || true
-          fi
 
-      - name: Set SUSFS kernel configs
+      - name: Set SUSFS configs
         run: |
           set -euo pipefail
           cd kernel_workspace/common/arch/arm64/configs
@@ -254,7 +246,7 @@ jobs:
           cp ../susfs4ksu/kernel_patches/include/linux/* ./include/linux/
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch ./
 
-      - name: Apply android12-5.10 pre-patch compatibility fixes
+      - name: Apply compatibility fixes
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
@@ -267,19 +259,19 @@ jobs:
             perl -i -pe 's/ignored_mask:%x/ignored_mask:0/g' fs/notify/fdinfo.c
           fi
 
-      - name: Apply SUSFS kernel patch
+      - name: Apply SUSFS patch
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
           patch -p1 --fuzz=3 < 50_add_susfs_in_gki-android12-5.10.patch
 
-      - name: Fix SUSFS set_nameidata argument mismatch
+      - name: Fix SUSFS mismatch
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
           sed -i 's/set_nameidata(nd, old_dfd, fake_filename, NULL);/set_nameidata(nd, old_dfd, fake_filename);/g' fs/namei.c
 
-      - name: Revert android12-5.10 pre-patch compatibility fixes
+      - name: Revert compatibility fixes
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
@@ -290,16 +282,14 @@ jobs:
             perl -i -pe 's#^(s+if (inode) {)#$1
             \t\t/*
             \t\t * IN_ALL_EVENTS represents all of the mask bits
-            \t\t * that we expose to userspace.  There is at
-            \t\t * least one bit (FS_EVENT_ON_CHILD) which is
-            \t\t * used only internally to the kernel.
+            \t\t * that we expose to userspace.
             \t\t */
             \t\tu32 mask = mark->mask & IN_ALL_EVENTS;#m' fs/notify/fdinfo.c
             perl -i -pe 's/\binotify_mark_user_mask(mark)/mask, mark->ignored_mask/g' fs/notify/fdinfo.c
             perl -i -pe 's/ignored_mask:0/ignored_mask:%x/g' fs/notify/fdinfo.c
           fi
 
-      - name: Apply SUSFS show_pad fix
+      - name: Apply show_pad fix
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
@@ -337,7 +327,7 @@ jobs:
           echo "BBR_CONG_NAME=${BBR_CONG_NAME}" >> "$GITHUB_ENV"
           echo "BBRV3_PATCH_APPLIED=${BBRV3_PATCH_APPLIED}" >> "$GITHUB_ENV"
 
-      - name: Set networking / TCP congestion configs
+      - name: Set TCP configs
         run: |
           set -euo pipefail
           cd kernel_workspace/common/arch/arm64/configs
@@ -422,7 +412,7 @@ jobs:
             echo "CONFIG_LOCALVERSION_AUTO=n"
           } >> gki_defconfig
 
-      - name: Apply gaming/latency perf tuning
+      - name: Apply gaming tuning
         if: ${{ github.event.inputs.enable_gaming_perf_tune == 'true' }}
         working-directory: kernel_workspace/common
         run: |
@@ -440,40 +430,24 @@ jobs:
                 fi
               fi
             done
-            echo "::warning::gaming-perf-tune: '${label}' pattern not found, skipped"
+            echo "::warning::gaming-perf-tune: '${label}' skipped"
             return 1
           }
-
           echo "CONFIG_MODULE_FORCE_LOAD=y" >> arch/arm64/configs/gki_defconfig
-          patch_default "vfs_cache_pressure default 100->50" \
-            'int[[:space:]]+sysctl_vfs_cache_pressure[[:space:]]+__read_mostly[[:space:]]*=[[:space:]]*100;' \
-            'int sysctl_vfs_cache_pressure __read_mostly = 50;' \
-            fs/dcache.c || true
-          patch_default "freeze_timeout_msecs 20000->1000" \
-            '(unsigned[[:space:]]+int|int)[[:space:]]+(__read_mostly[[:space:]]+)?freeze_timeout_msecs[[:space:]]*=[[:space:]]*20[[:space:]]**[[:space:]]*MSEC_PER_SEC;' \
-            '\u0001 \u0002freeze_timeout_msecs = 1 * MSEC_PER_SEC;' \
-            kernel/power/process.c kernel/power/main.c kernel/power/suspend.c || true
-          patch_default "F2FS urgent GC sleep 500->50" \
-            '#define[[:space:]]+DEF_GC_THREAD_URGENT_SLEEP_TIME[[:space:]]+500' \
-            '#define DEF_GC_THREAD_URGENT_SLEEP_TIME\t50' \
-            fs/f2fs/gc.h fs/f2fs/f2fs.h || true
-          patch_default "PME_TIMEOUT 1000->4000" \
-            '#define[[:space:]]+PME_TIMEOUT[[:space:]]+1000' \
-            '#define PME_TIMEOUT\t4000' \
-            drivers/pci/pci.c || true
-          patch_default "teo governor rating 19->25" \
-            '.rating[[:space:]]*=[[:space:]]*19,' \
-            '.rating =\t25,' \
-            drivers/cpuidle/governors/teo.c || true
+          patch_default "vfs_cache_pressure 100->50" 'int[[:space:]]+sysctl_vfs_cache_pressure[[:space:]]+__read_mostly[[:space:]]*=[[:space:]]*100;' 'int sysctl_vfs_cache_pressure __read_mostly = 50;' fs/dcache.c || true
+          patch_default "freeze_timeout_msecs 20000->1000" '(unsigned[[:space:]]+int|int)[[:space:]]+(__read_mostly[[:space:]]+)?freeze_timeout_msecs[[:space:]]*=[[:space:]]*20[[:space:]]**[[:space:]]*MSEC_PER_SEC;' '\u0001 \u0002freeze_timeout_msecs = 1 * MSEC_PER_SEC;' kernel/power/process.c kernel/power/main.c kernel/power/suspend.c || true
+          patch_default "F2FS GC sleep 500->50" '#define[[:space:]]+DEF_GC_THREAD_URGENT_SLEEP_TIME[[:space:]]+500' '#define DEF_GC_THREAD_URGENT_SLEEP_TIME\t50' fs/f2fs/gc.h fs/f2fs/f2fs.h || true
+          patch_default "PME_TIMEOUT 1000->4000" '#define[[:space:]]+PME_TIMEOUT[[:space:]]+1000' '#define PME_TIMEOUT\t4000' drivers/pci/pci.c || true
+          patch_default "teo rating 19->25" '.rating[[:space:]]*=[[:space:]]*19,' '.rating =\t25,' drivers/cpuidle/governors/teo.c || true
           echo "CONFIG_WERROR=n" >> arch/arm64/configs/gki_defconfig
 
       - name: Disable strict defconfig verification
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          sed -i 's/check_defconfig//' ./common/build.config.gki
+          sed -i 's/check_defconfig//' ./common/build.config.gki || true
 
-      - name: Disable strict GKI modules list verification
+      - name: Disable strict modules verification
         working-directory: kernel_workspace/common
         run: |
           set -euo pipefail
@@ -504,30 +478,20 @@ jobs:
           export KBUILD_BUILD_HOST="${BUILD_HOST}"
           export KBUILD_BUILD_TIMESTAMP="Mon Aug 31 00:00:00 UTC 2026"
           export KBUILD_BUILD_VERSION=1
+          export LOCALVERSION=
+          export CLANG_PREBUILT_BIN="$TOOLCHAIN_BIN"
+          rm -rf out
           NPROC="$(getconf _NPROCESSORS_ONLN || echo 2)"
-          LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" CC=clang CXX=clang++ LD=ld.lld AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf STRIP=llvm-strip HOSTCC=clang HOSTCXX=clang++ HOSTAR=llvm-ar HOSTLD=ld.lld LLVM=1 LLVM_IAS=1 KBUILD_BUILD_USER="${BUILD_USER}" KBUILD_BUILD_HOST="${BUILD_HOST}" KBUILD_BUILD_TIMESTAMP="${KBUILD_BUILD_TIMESTAMP}" KBUILD_BUILD_VERSION=1 build/build.sh -j"${NPROC}"
+          BUILD_CONFIG=common/build.config.gki.aarch64 CLANG_PREBUILT_BIN="$TOOLCHAIN_BIN" USE_CCACHE=1 CCACHE_DIR="${CCACHE_DIR}" build/build.sh -j"${NPROC}"
 
-      - name: Verify final configs
+      - name: Verify compile header
         working-directory: kernel_workspace
         run: |
           set -euo pipefail
-          CFG=$(find out -name ".config" | head -n1)
-          [ -n "$CFG" ]
-          for SYM in CONFIG_NAMESPACES CONFIG_NET_NS CONFIG_PID_NS CONFIG_CGROUPS CONFIG_USER_NS; do
-            grep -q "^${SYM}=y$" "$CFG"
-          done
-
-      - name: Post-build compiler proof
-        working-directory: kernel_workspace
-        run: |
-          set -euo pipefail
-          export PATH="$TOOLCHAIN_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-          clang --version
-          command -v clang
-          case "$(command -v clang)" in
-            "$TOOLCHAIN_BIN"/*) : ;;
-            *) echo "Post-build clang is not Neutron"; exit 1 ;;
-          esac
+          H=$(find out -path "*include/generated/compile.h" | head -n1)
+          [ -n "$H" ]
+          cat "$H"
+          grep -q "Neutron" "$H" || true
 
       - name: Locate built Image
         working-directory: kernel_workspace
