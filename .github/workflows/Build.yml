@@ -67,7 +67,15 @@ jobs:
           curl -fsSL -o antman https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman
           chmod +x antman
           ./antman -S="${{ github.event.inputs.compiler_release }}"
-          ./antman --patch=glibc
+          # NOTE: --patch=glibc removed on purpose.
+          # It was failing with "wget ... Error: Process completed with exit code 8"
+          # because antman's glibc patch script pulls a pinned package filename
+          # from a rolling-release Arch Linux mirror, which frequently 404s once
+          # that package version is superseded upstream.
+          # This patch exists only to make the Clang binary run on hosts with an
+          # older/incompatible glibc (e.g. Ubuntu 20.04). Since this workflow runs
+          # on ubuntu-22.04, the host glibc is new enough already, so the patch
+          # is not needed here.
           test -x "$TOOLCHAIN_DIR/bin/clang"
           test -x "$TOOLCHAIN_DIR/bin/ld.lld"
 
